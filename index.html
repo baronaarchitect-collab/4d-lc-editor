@@ -12,6 +12,7 @@
   }
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;font-family:"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);overflow:hidden;font-size:13px;}
+  body{display:flex;flex-direction:column;}
   button{font-family:inherit;font-size:12px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;}
   button:hover{border-color:var(--accent);background:#232c3d;}
   button:disabled{opacity:.4;cursor:not-allowed;}
@@ -23,7 +24,7 @@
   #top .logo b{color:var(--accent2);}
   .sep{width:1px;height:26px;background:var(--line);margin:0 4px;}
   .spacer{flex:1;}
-  #main{display:flex;height:calc(100% - 46px);}
+  #main{display:flex;flex:1;min-height:0;}
   #left{width:640px;min-width:360px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0;}
   #dragbar{width:5px;cursor:col-resize;background:var(--line);flex-shrink:0;}
   #dragbar:hover{background:var(--accent);}
@@ -72,6 +73,37 @@
   #timeSlider{flex:1;}
   #timeline.hidden{display:none;}
 
+  /* ===== GANTT ===== */
+  #gantt{flex-shrink:0;height:300px;background:var(--panel);border-top:1px solid var(--line);display:flex;flex-direction:column;}
+  #gantt.collapsed{height:34px;}
+  #ganttHead{height:34px;flex-shrink:0;display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--line);}
+  #ganttHead .gtitle{font-weight:700;cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;color:var(--accent);}
+  #ganttHead .gtitle:hover{color:#fff;}
+  #gantt.collapsed #ganttBody{display:none;}
+  #ganttHead label{display:flex;align-items:center;gap:5px;}
+  #ganttBody{flex:1;overflow:auto;}
+  .gchart{position:relative;font-size:11px;}
+  .ghead-row{position:sticky;top:0;z-index:5;display:flex;height:26px;background:var(--panel2);border-bottom:1px solid var(--line);}
+  .grow{display:flex;height:26px;border-bottom:1px solid #161d29;}
+  .grow:hover{background:#131a26;}
+  .grow.selg{background:var(--rowsel);}
+  .glabel{position:sticky;left:0;z-index:4;width:250px;min-width:250px;background:var(--panel);display:flex;align-items:center;gap:3px;padding:0 8px;border-right:1px solid var(--line);white-space:nowrap;overflow:hidden;cursor:pointer;}
+  .grow.selg .glabel{background:var(--rowsel);}
+  .ghead-row .glabel{background:var(--panel2);color:var(--muted);font-weight:600;}
+  .gtw{width:12px;color:var(--muted);cursor:pointer;flex-shrink:0;text-align:center;}
+  .gtrack,.gticks{position:relative;flex:1;}
+  .gbar{position:absolute;top:5px;height:15px;border-radius:3px;background:var(--accent);cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.45);}
+  .gbar:active{cursor:grabbing;}
+  .gbar.crit{background:var(--crit);}
+  .gbar.summ{background:#64748b;height:8px;top:9px;border-radius:2px;}
+  .gbar.summ::before,.gbar.summ::after{content:"";position:absolute;bottom:-3px;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #64748b;}
+  .gbar.summ::before{left:0;} .gbar.summ::after{right:0;}
+  .gbar.actual{background:transparent;border:1.5px solid var(--accent2);top:3px;height:19px;border-radius:3px;pointer-events:none;}
+  .grow.drop{background:rgba(59,130,246,.18);outline:1px dashed var(--accent);outline-offset:-2px;}
+  .gtick{position:absolute;top:0;bottom:0;border-left:1px solid #202836;color:var(--muted);font-size:9px;padding-left:2px;line-height:26px;}
+  .gtick.month{border-left:1px solid #3a4658;color:var(--txt);font-weight:600;}
+  .gtoday{position:absolute;top:26px;bottom:0;width:2px;background:var(--warn);z-index:2;pointer-events:none;}
+
   .hint{color:var(--muted);font-size:11px;}
   .empty{padding:30px;color:var(--muted);text-align:center;line-height:1.7;}
   ::-webkit-scrollbar{width:10px;height:10px;}
@@ -119,6 +151,7 @@
       <button id="tUp" title="Subir">▲</button>
       <button id="tDown" title="Bajar">▼</button>
       <button id="tDel" title="Eliminar">🗑</button>
+      <button id="tWBS" title="Generar EDT desde las categorías y tipos del IFC">🏗 EDT⇐IFC</button>
       <div class="spacer"></div>
       <button id="tDemo" title="Cargar cronograma de ejemplo">Ejemplo</button>
     </div>
@@ -149,6 +182,16 @@
   </div>
 </div>
 
+<div id="gantt" class="collapsed">
+  <div id="ganttHead">
+    <span class="gtitle" id="ganttToggle">▸ Diagrama de Gantt</span>
+    <span class="hint">Arrastra una barra sobre otra actividad para hacerla su <b>predecesora</b>. Los resúmenes se colapsan con ▾/▸.</span>
+    <div class="spacer"></div>
+    <label class="hint">Zoom <input type="range" id="ganttZoom" min="6" max="46" value="20" style="width:120px"></label>
+  </div>
+  <div id="ganttBody"></div>
+</div>
+
 <div id="modal"><div class="box">
   <div class="hd"><span id="mTitle">Elementos</span><button id="mClose">Cerrar</button></div>
   <div class="bd" id="mBody"></div>
@@ -167,7 +210,12 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { IfcAPI } from 'web-ifc';
+import * as WebIFC from 'web-ifc';
+const { IfcAPI } = WebIFC;
+
+// mapa código-de-tipo -> nombre de clase IFC (IFCWALL, IFCSLAB, ...)
+const IFC_CODE2NAME = {};
+for(const k in WebIFC){ if(typeof WebIFC[k]==='number' && /^IFC[A-Z0-9]+$/.test(k)) IFC_CODE2NAME[WebIFC[k]] = k; }
 
 /* ============================================================= *
  *  ESTADO GLOBAL
@@ -292,21 +340,40 @@ async function loadIFC(file){
     }
     if(meshes.length){
       const base = meshes[0].material.color.clone();
-      Elements.set(expressID,{meshes, baseColor:base, centroid:null, name:null, type:null});
+      Elements.set(expressID,{meshes, baseColor:base, centroid:null, name:null, type:null, category:null, typeName:null, objType:null});
       count++;
     }
   });
 
-  // metadatos (nombre/tipo)
+  // metadatos (nombre / categoría IFC / ObjectType)
   showLoader('Leyendo propiedades…');
   await new Promise(r=>setTimeout(r,10));
   for(const [id,e] of Elements){
     try{
       const line = ifcAPI.GetLine(modelID, id);
       e.name = (line.Name && line.Name.value) ? line.Name.value : ('#'+id);
-      e.type = ifcTypeName(line.type);
-    }catch(_){ e.name='#'+id; e.type='Elemento'; }
+      e.category = ifcTypeName(line.type);
+      e.type = e.category;
+      e.objType = (line.ObjectType && line.ObjectType.value) ? line.ObjectType.value : null;
+    }catch(_){ e.name='#'+id; e.type='Elemento'; e.category='Otros'; }
   }
+
+  // TIPOS: relación IfcRelDefinesByType (elemento -> tipo)
+  showLoader('Leyendo tipos…');
+  try{
+    const rels = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELDEFINESBYTYPE);
+    for(let i=0;i<rels.size();i++){
+      const rel = ifcAPI.GetLine(modelID, rels.get(i));
+      let tName = null;
+      if(rel.RelatingType && rel.RelatingType.value){
+        try{ const to = ifcAPI.GetLine(modelID, rel.RelatingType.value);
+          tName = (to.Name && to.Name.value) ? to.Name.value : ifcTypeName(to.type); }catch(_){}
+      }
+      const objs = rel.RelatedObjects || [];
+      for(const o of objs){ if(o && o.value!=null){ const e=Elements.get(o.value); if(e && tName) e.typeName=tName; } }
+    }
+  }catch(_){}
+  for(const [id,e] of Elements){ if(!e.typeName) e.typeName = e.objType || '(sin tipo definido)'; }
 
   ifcAPI.CloseModel(modelID);
 
@@ -324,18 +391,73 @@ async function loadIFC(file){
 
   hideLoader();
   document.getElementById('hEls').textContent = count;
-  document.getElementById('hHint').textContent = count? 'Activa ▭ Selección y arrastra una caja para seleccionar. Luego "Asignar a actividad".' : 'No se encontró geometría.';
   fitView();
+
+  // EDT automática desde categorías + tipos del IFC
+  if(count>0){
+    let doWBS = true;
+    if(State.tasks.length>0) doWBS = confirm('¿Generar la EDT automáticamente a partir de las CATEGORÍAS y TIPOS del IFC?\n\n(Reemplazará el cronograma actual)');
+    if(doWBS){
+      buildWBSFromIFC(file.name);
+      document.getElementById('hHint').textContent = 'EDT generada desde el IFC. Ajusta duraciones y pulsa ⚡ Calcular CPM.';
+    } else {
+      document.getElementById('hHint').textContent = 'Activa ▭ Selección, arrastra una caja y pulsa "Asignar a actividad".';
+    }
+  } else {
+    document.getElementById('hHint').textContent = 'No se encontró geometría.';
+  }
   applyElementColors();
 }
 
 function ifcTypeName(code){
-  try{
-    // web-ifc no expone siempre el nombre; usamos mapa mínimo por prefijo si falla.
-    const n = ifcAPI.GetNameFromTypeCode ? ifcAPI.GetNameFromTypeCode(code) : null;
-    return n || 'IFC('+code+')';
-  }catch(_){ return 'Elemento'; }
+  if(IFC_CODE2NAME[code]) return IFC_CODE2NAME[code];
+  try{ const n = ifcAPI.GetNameFromTypeCode ? ifcAPI.GetNameFromTypeCode(code) : null; return n || 'IFC('+code+')'; }
+  catch(_){ return 'IFC('+code+')'; }
 }
+
+/* Construye la EDT: raíz -> categoría (clase IFC) -> tipo (con elementos asignados) */
+function buildWBSFromIFC(fileName){
+  if(Elements.size===0){ alert('Primero importa un IFC.'); return; }
+  // agrupar categoria -> tipo -> [ids]
+  const cats = new Map();
+  for(const [id,e] of Elements){
+    const cat = prettyCat(e.category||'Otros');
+    const tn = e.typeName || '(sin tipo definido)';
+    if(!cats.has(cat)) cats.set(cat,new Map());
+    const m = cats.get(cat);
+    if(!m.has(tn)) m.set(tn,[]);
+    m.get(tn).push(id);
+  }
+  const tasks=[];
+  const mk=(name,level)=>{ const t=newTask(level); t.name=name; return t; };
+  const root=mk('📦 '+(fileName||'Modelo IFC'),0); tasks.push(root);
+  for(const cat of [...cats.keys()].sort()){
+    const m=cats.get(cat);
+    let catCount=0; for(const ids of m.values()) catCount+=ids.length;
+    const csum=mk(`${cat}  ·  ${catCount} elem.`,1); tasks.push(csum);
+    for(const tn of [...m.keys()].sort()){
+      const ids=m.get(tn);
+      const leaf=mk(`${tn}  (${ids.length})`,2);
+      leaf.elements=ids.slice();
+      leaf.duration=Math.max(1,Math.ceil(ids.length/5));
+      tasks.push(leaf);
+    }
+  }
+  State.tasks=tasks;
+  State.selectedTaskId=tasks[0]?tasks[0].id:null;
+  if(!document.getElementById('projStart').value) document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
+  renderTable(); openGantt();
+}
+function prettyCat(c){
+  // "IFCWALLSTANDARDCASE" -> "Ifc Wall Standard Case" (legible)
+  if(/^IFC/.test(c)){ let s=c.slice(3).toLowerCase(); s=s.charAt(0).toUpperCase()+s.slice(1); return 'Ifc '+s.replace(/^\w/,x=>x.toUpperCase()); }
+  return c;
+}
+document.getElementById('tWBS').onclick=()=>{
+  if(Elements.size===0){ alert('Primero importa un IFC.'); return; }
+  if(State.tasks.length>0 && !confirm('¿Regenerar la EDT desde el IFC? Reemplazará el cronograma actual.')) return;
+  buildWBSFromIFC('Modelo IFC');
+};
 
 function ifcBufferGeometry(vertexData, indexData){
   const g = new THREE.BufferGeometry();
@@ -613,7 +735,7 @@ function loadDemo(){
   if(!document.getElementById('projStart').value){
     document.getElementById('projStart').value = new Date().toISOString().slice(0,10);
   }
-  renderTable(); calcCPM();
+  renderTable(); calcCPM(); openGantt();
 }
 
 function focusName(id){
@@ -624,7 +746,8 @@ function fmt(d){ return d||''; }
 
 function renderTable(){
   if(State.tasks.length===0){
-    tableWrap.innerHTML = '<div class="empty">No hay actividades.<br>Pulsa <b>＋ Actividad</b> o <b>Ejemplo</b> para empezar.<br><br>Usa <b>Sangría/Anular</b> para crear la jerarquía EDT como en MS&nbsp;Project.</div>';
+    tableWrap.innerHTML = '<div class="empty">No hay actividades.<br>Pulsa <b>＋ Actividad</b>, <b>Ejemplo</b> o importa un IFC y usa <b>🏗 EDT⇐IFC</b>.<br><br>Usa <b>Sangría/Anular</b> para crear la jerarquía EDT como en MS&nbsp;Project.</div>';
+    renderGantt();
     return;
   }
   const rows = State.tasks.map((t,i)=>{
@@ -659,6 +782,7 @@ function renderTable(){
     </tr></thead><tbody>${rows}</tbody></table>`;
   bindTable();
   updateSelUI();
+  renderGantt();
 }
 
 function isHidden(idx){
@@ -688,11 +812,7 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&
 function bindTable(){
   tableWrap.querySelectorAll('tr[data-row]').forEach(tr=>{
     tr.addEventListener('mousedown',e=>{
-      if(e.target.tagName==='INPUT'||e.target.classList.contains('twist')||e.target.classList.contains('elcount')) {}
-      State.selectedTaskId = Number(tr.dataset.row);
-      tableWrap.querySelectorAll('tr').forEach(r=>r.classList.remove('sel'));
-      tr.classList.add('sel'); updateSelUI();
-      highlightTaskElements();
+      selectTask(Number(tr.dataset.row));
     });
   });
   tableWrap.querySelectorAll('.nameinput').forEach(inp=>{
@@ -723,6 +843,14 @@ function highlightTaskElements(){
   if(t && t.elements.length){
     for(const id of t.elements){ const e=Elements.get(id); if(e) e.meshes.forEach(m=>{m.material.emissive=new THREE.Color(0x223344);}); }
   }
+}
+
+function selectTask(id){
+  State.selectedTaskId = id;
+  tableWrap.querySelectorAll('tr[data-row]').forEach(r=>r.classList.toggle('sel', Number(r.dataset.row)===id));
+  document.querySelectorAll('#ganttBody .grow').forEach(r=>r.classList.toggle('selg', Number(r.dataset.grow)===id));
+  updateSelUI();
+  highlightTaskElements();
 }
 
 /* ============================================================= *
@@ -842,6 +970,127 @@ function calcCPM(){
 document.getElementById('btnCPM').onclick=calcCPM;
 
 function addDays(base,days){ const d=new Date(base); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
+
+/* ============================================================= *
+ *  DIAGRAMA DE GANTT  (colapsable + arrastrar para crear dependencia)
+ * ============================================================= */
+let ganttOpen=false, ganttDayW=20;
+const ganttEl=document.getElementById('gantt');
+const DAYMS=86400000;
+
+function toggleGantt(){
+  ganttOpen=!ganttOpen;
+  ganttEl.classList.toggle('collapsed',!ganttOpen);
+  document.getElementById('ganttToggle').textContent = (ganttOpen?'▾':'▸')+' Diagrama de Gantt';
+  if(ganttOpen) renderGantt();
+  onResize();
+}
+document.getElementById('ganttToggle').onclick=toggleGantt;
+document.getElementById('ganttZoom').addEventListener('input',e=>{ ganttDayW=Number(e.target.value); renderGantt(); });
+function openGantt(){ if(!ganttOpen) toggleGantt(); else renderGantt(); }
+
+function ganttRange(){
+  let min=null,max=null;
+  for(const t of State.tasks){
+    for(const k of ['ps','pf','as','af']){ if(t[k]){ const d=new Date(t[k]+'T00:00:00'); if(!min||d<min)min=d; if(!max||d>max)max=d; } }
+  }
+  return {min,max};
+}
+
+function renderGantt(){
+  if(!ganttOpen) return;
+  const body=document.getElementById('ganttBody');
+  if(State.tasks.length===0){ body.innerHTML='<div class="empty">Sin actividades.</div>'; return; }
+  const {min,max}=ganttRange();
+  if(!min||!max){ body.innerHTML='<div class="empty">Sin fechas todavía.<br>Pulsa <b>⚡ Calcular CPM</b> o escribe Inicio/Fin planificados en la tabla.</div>'; return; }
+
+  const totalDays=Math.max(1,Math.round((max-min)/DAYMS))+2;
+  const dw=ganttDayW, trackW=totalDays*dw;
+  const dayIdx=(dstr)=>Math.round((new Date(dstr+'T00:00:00')-min)/DAYMS);
+
+  // cabecera con marcas
+  let ticks='';
+  for(let i=0;i<=totalDays;i++){
+    const d=new Date(min.getTime()+i*DAYMS);
+    const month = d.getDate()===1, week = d.getDay()===1;
+    if(month||week||dw>=24){
+      const lbl = month ? d.toLocaleDateString('es',{month:'short',year:'2-digit'}) : (dw>=24? d.getDate() : '');
+      ticks+=`<div class="gtick ${month?'month':''}" style="left:${i*dw}px">${lbl}</div>`;
+    }
+  }
+  const today=new Date(); today.setHours(0,0,0,0);
+  let todayLine='';
+  if(today>=min && today<=max){ todayLine=`<div class="gtoday" style="left:${250+Math.round((today-min)/DAYMS)*dw}px"></div>`; }
+
+  let rowsHtml='';
+  State.tasks.forEach((t,i)=>{
+    if(isHidden(i)) return;
+    const summ=isSummary(i);
+    const sel=t.id===State.selectedTaskId?'selg':'';
+    const indent=`<span style="display:inline-block;width:${t.level*12}px;flex-shrink:0"></span>`;
+    const tw = summ? `<span class="gtw" data-gtw="${t.id}">${t.collapsed?'▸':'▾'}</span>` : '<span class="gtw"></span>';
+    let bar='';
+    if(t.ps){
+      const x=dayIdx(t.ps)*dw;
+      const end=t.pf?dayIdx(t.pf):dayIdx(t.ps)+ (Number(t.duration)||1);
+      const w=Math.max(dw*0.5,(end-dayIdx(t.ps))*dw);
+      bar=`<div class="gbar ${summ?'summ':''} ${t.critical?'crit':''}" draggable="true" data-bar="${t.id}"
+            style="left:${x}px;width:${w}px" title="${escapeHtml(t.name)}&#10;Plan: ${t.ps} → ${t.pf||'?'}${t.critical?'&#10;⚠ CRÍTICA':''}"></div>`;
+    }
+    let actual='';
+    if(t.as){ const ax=dayIdx(t.as)*dw; const ae=t.af?dayIdx(t.af):dayIdx(t.as)+1; const aw=Math.max(dw*0.5,(ae-dayIdx(t.as))*dw);
+      actual=`<div class="gbar actual" style="left:${ax}px;width:${aw}px" title="Real: ${t.as} → ${t.af||'?'}"></div>`; }
+    rowsHtml+=`<div class="grow ${sel}" data-grow="${t.id}">
+      <div class="glabel" data-lbl="${t.id}" style="font-weight:${summ?700:400}">${indent}${tw}<span class="gname">${escapeHtml(t.name)}</span></div>
+      <div class="gtrack" style="min-width:${trackW}px">${bar}${actual}</div>
+    </div>`;
+  });
+
+  body.innerHTML=`<div class="gchart" style="min-width:${250+trackW}px">
+    <div class="ghead-row"><div class="glabel">Actividad</div><div class="gticks" style="min-width:${trackW}px">${ticks}</div></div>
+    ${rowsHtml}${todayLine}
+  </div>`;
+  bindGantt();
+}
+
+function bindGantt(){
+  const body=document.getElementById('ganttBody');
+  body.querySelectorAll('.grow').forEach(row=>{
+    const id=Number(row.dataset.grow);
+    row.querySelector('.glabel').addEventListener('mousedown',e=>{
+      if(e.target.classList.contains('gtw')) return;
+      selectTask(id);
+    });
+    row.addEventListener('dragover',e=>{ e.preventDefault(); e.dataTransfer.dropEffect='link'; row.classList.add('drop'); });
+    row.addEventListener('dragleave',()=>row.classList.remove('drop'));
+    row.addEventListener('drop',e=>{
+      e.preventDefault(); row.classList.remove('drop');
+      const src=Number(e.dataTransfer.getData('text/plain'));
+      linkPredecessor(src,id);
+    });
+  });
+  body.querySelectorAll('.gtw[data-gtw]').forEach(tw=>{
+    tw.addEventListener('click',e=>{ e.stopPropagation(); const t=getTask(Number(tw.dataset.gtw)); t.collapsed=!t.collapsed; renderTable(); });
+  });
+  body.querySelectorAll('.gbar[data-bar]').forEach(bar=>{
+    bar.addEventListener('dragstart',e=>{ e.dataTransfer.setData('text/plain',bar.dataset.bar); e.dataTransfer.effectAllowed='link'; bar.style.opacity='.45'; });
+    bar.addEventListener('dragend',()=>{ bar.style.opacity='1'; });
+  });
+}
+
+/* arrastrar actividad ORIGEN sobre actividad DESTINO => origen es predecesora del destino */
+function linkPredecessor(srcId,tgtId){
+  if(!srcId||srcId===tgtId) return;
+  const src=getTask(srcId), tgt=getTask(tgtId);
+  if(!src||!tgt) return;
+  const srcNum=taskIndex(srcId)+1;
+  const list=(tgt.pred||'').split(/[,;]/).map(s=>s.trim()).filter(Boolean);
+  if(list.includes(String(srcNum))){ document.getElementById('hHint').textContent=`"${src.name}" ya es predecesora de "${tgt.name}".`; return; }
+  list.push(String(srcNum));
+  tgt.pred=list.join(',');
+  document.getElementById('hHint').textContent=`🔗 "${src.name}" → predecesora de "${tgt.name}". Recalculando CPM…`;
+  calcCPM();
+}
 
 /* ============================================================= *
  *  SIMULACIÓN 4D
