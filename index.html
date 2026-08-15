@@ -151,7 +151,13 @@
       <button id="tUp" title="Subir">▲</button>
       <button id="tDown" title="Bajar">▼</button>
       <button id="tDel" title="Eliminar">🗑</button>
-      <button id="tWBS" title="Generar EDT desde las categorías y tipos del IFC">🏗 EDT⇐IFC</button>
+      <select id="wbsMode" title="Cómo agrupar la EDT generada desde el IFC">
+        <option value="type">Categoría › Tipo</option>
+        <option value="level-cat">Nivel › Categoría › Tipo</option>
+        <option value="level-type">Nivel › Tipo</option>
+        <option value="level">Solo Nivel</option>
+      </select>
+      <button id="tWBS" title="Generar EDT desde el IFC con la agrupación elegida">🏗 EDT⇐IFC</button>
       <div class="spacer"></div>
       <button id="tDemo" title="Cargar cronograma de ejemplo">Ejemplo</button>
     </div>
@@ -340,7 +346,7 @@ async function loadIFC(file){
     }
     if(meshes.length){
       const base = meshes[0].material.color.clone();
-      Elements.set(expressID,{meshes, baseColor:base, centroid:null, name:null, type:null, category:null, typeName:null, objType:null});
+      Elements.set(expressID,{meshes, baseColor:base, centroid:null, name:null, type:null, category:null, typeName:null, objType:null, storey:null, storeyElev:null});
       count++;
     }
   });
@@ -374,6 +380,27 @@ async function loadIFC(file){
     }
   }catch(_){}
   for(const [id,e] of Elements){ if(!e.typeName) e.typeName = e.objType || '(sin tipo definido)'; }
+
+  // NIVELES: relación IfcRelContainedInSpatialStructure (elemento -> planta/nivel)
+  showLoader('Leyendo niveles…');
+  const storeyElev = new Map();
+  try{
+    const relsC = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
+    for(let i=0;i<relsC.size();i++){
+      const rel = ifcAPI.GetLine(modelID, relsC.get(i));
+      if(!rel.RelatingStructure || rel.RelatingStructure.value==null) continue;
+      let sName=null, sElev=null;
+      try{
+        const st = ifcAPI.GetLine(modelID, rel.RelatingStructure.value);
+        sName = (st.Name && st.Name.value) ? st.Name.value : ifcTypeName(st.type);
+        if(st.Elevation && st.Elevation.value!=null) sElev = Number(st.Elevation.value);
+      }catch(_){}
+      if(sName!=null) storeyElev.set(sName, sElev);
+      const objs = rel.RelatedElements || [];
+      for(const o of objs){ if(o && o.value!=null){ const e=Elements.get(o.value); if(e){ e.storey=sName; e.storeyElev=sElev; } } }
+    }
+  }catch(_){}
+  window.__storeyElev = storeyElev;   // usado por buildWBSFromIFC para ordenar por elevación
 
   ifcAPI.CloseModel(modelID);
 
@@ -415,38 +442,57 @@ function ifcTypeName(code){
   catch(_){ return 'IFC('+code+')'; }
 }
 
-/* Construye la EDT: raíz -> categoría (clase IFC) -> tipo (con elementos asignados) */
+/* Claves de agrupación disponibles */
+function wbsKeys(mode){
+  const kCat  = {fn:e=>prettyCat(e.category||'Otros')};
+  const kType = {fn:e=>e.typeName||'(sin tipo definido)'};
+  const storeyElev = window.__storeyElev || new Map();
+  const kLevel= {fn:e=>e.storey||'Sin nivel',
+                 cmp:(a,b)=>((storeyElev.get(a)??1e9)-(storeyElev.get(b)??1e9)) || String(a).localeCompare(String(b))};
+  switch(mode){
+    case 'level-cat':  return [kLevel, kCat, kType];   // Nivel › Categoría › Tipo
+    case 'level-type': return [kLevel, kType];          // Nivel › Tipo
+    case 'level':      return [kLevel];                 // solo Nivel
+    case 'type':       return [kType];                  // solo Tipo
+    default:           return [kCat, kType];            // Categoría › Tipo
+  }
+}
+
+/* Construye la EDT recursivamente según las claves elegidas; el último nivel = hoja con elementos */
 function buildWBSFromIFC(fileName){
   if(Elements.size===0){ alert('Primero importa un IFC.'); return; }
-  // agrupar categoria -> tipo -> [ids]
-  const cats = new Map();
-  for(const [id,e] of Elements){
-    const cat = prettyCat(e.category||'Otros');
-    const tn = e.typeName || '(sin tipo definido)';
-    if(!cats.has(cat)) cats.set(cat,new Map());
-    const m = cats.get(cat);
-    if(!m.has(tn)) m.set(tn,[]);
-    m.get(tn).push(id);
-  }
+  const mode = (document.getElementById('wbsMode')||{}).value || 'type';
+  const keys = wbsKeys(mode);
+  const entries = [...Elements.entries()].map(([id,e])=>({id,e}));
+
   const tasks=[];
   const mk=(name,level)=>{ const t=newTask(level); t.name=name; return t; };
   const root=mk('📦 '+(fileName||'Modelo IFC'),0); tasks.push(root);
-  for(const cat of [...cats.keys()].sort()){
-    const m=cats.get(cat);
-    let catCount=0; for(const ids of m.values()) catCount+=ids.length;
-    const csum=mk(`${cat}  ·  ${catCount} elem.`,1); tasks.push(csum);
-    for(const tn of [...m.keys()].sort()){
-      const ids=m.get(tn);
-      const leaf=mk(`${tn}  (${ids.length})`,2);
-      leaf.elements=ids.slice();
-      leaf.duration=Math.max(1,Math.ceil(ids.length/5));
-      tasks.push(leaf);
+
+  (function rec(items, ki, level){
+    const key=keys[ki];
+    const groups=new Map();
+    for(const it of items){ const k=key.fn(it.e)||'(sin dato)'; if(!groups.has(k))groups.set(k,[]); groups.get(k).push(it); }
+    const orderedKeys=[...groups.keys()].sort(key.cmp || ((a,b)=>String(a).localeCompare(String(b))));
+    for(const k of orderedKeys){
+      const arr=groups.get(k);
+      if(ki===keys.length-1){                          // hoja: actividad con elementos
+        const leaf=mk(`${k}  (${arr.length})`, level);
+        leaf.elements=arr.map(it=>it.id);
+        leaf.duration=Math.max(1,Math.ceil(arr.length/5));
+        tasks.push(leaf);
+      }else{                                            // resumen
+        tasks.push(mk(`${k}  ·  ${arr.length} elem.`, level));
+        rec(arr, ki+1, level+1);
+      }
     }
-  }
+  })(entries, 0, 1);
+
   State.tasks=tasks;
   State.selectedTaskId=tasks[0]?tasks[0].id:null;
   if(!document.getElementById('projStart').value) document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
   renderTable(); openGantt();
+  document.getElementById('hHint').textContent=`EDT generada (${tasks.length-1} nodos) agrupando por: ${document.getElementById('wbsMode').selectedOptions[0].text}.`;
 }
 function prettyCat(c){
   // "IFCWALLSTANDARDCASE" -> "Ifc Wall Standard Case" (legible)
@@ -641,7 +687,7 @@ function isSummary(i){
 }
 function newTask(level){
   return {id:State.seq++, name:'Nueva actividad', level:level||0, duration:1,
-          ps:'', pf:'', as:'', af:'', pred:'', elements:[], color:PALETTE[(State.seq)%PALETTE.length], collapsed:false,
+          anchor:null, ps:'', pf:'', as:'', af:'', pred:'', elements:[], color:PALETTE[(State.seq)%PALETTE.length], collapsed:false,
           es:null, ef:null, ls:null, lf:null, slack:null, critical:false};
 }
 
@@ -824,8 +870,12 @@ function bindTable(){
   });
   tableWrap.querySelectorAll('input[data-f]').forEach(inp=>{
     inp.addEventListener('change',e=>{
-      const t=getTask(Number(inp.dataset.id)); const f=inp.dataset.f;
-      t[f]= f==='duration'? Number(inp.value)||0 : inp.value;
+      const t=getTask(Number(inp.dataset.id)); const f=inp.dataset.f; const v=inp.value;
+      if(f==='duration'){ t.duration=Number(v)||0; calcCPM(); }            // mantiene inicio, recalcula fin
+      else if(f==='ps'){ t.anchor = v||null; t.ps=v; calcCPM(); }          // fija el inicio (ancla)
+      else if(f==='pf'){ if(t.ps && v){ t.duration=Math.max(0,Math.round((new Date(v+'T00:00:00')-new Date(t.ps+'T00:00:00'))/DAYMS)); } calcCPM(); }
+      else if(f==='pred'){ t.pred=v; calcCPM(); }                          // dependencias Fin→Inicio
+      else { t[f]=v; renderGantt(); }                                       // as / af (fechas reales)
     });
   });
   tableWrap.querySelectorAll('.twist[data-tw]').forEach(tw=>{
@@ -923,10 +973,18 @@ function calcCPM(){
   if(order.length<leaves.length){ alert('⚠ Hay dependencias circulares. Revisa la columna Pred.'); }
 
   const T=new Map(leaves.map(t=>[t.id,t]));
-  // forward pass
+  // base = inicio de proyecto (día 0 del espacio de cálculo)
+  const projStartStr = document.getElementById('projStart').value || new Date().toISOString().slice(0,10);
+  const base = new Date(projStartStr+'T00:00:00');
+  const dayOf = (str)=> Math.round((new Date(str+'T00:00:00')-base)/DAYMS);
+  // forward pass — respeta ANCLA de inicio (fecha manual) + relación Fin→Inicio
   for(const id of order){ const t=T.get(id); const ps=preds.get(id);
-    t.es = ps.length? Math.max(...ps.map(p=>T.get(p).ef)) : 0;
+    let start = t.anchor ? dayOf(t.anchor) : 0;          // inicio deseado por el usuario (o ASAP)
+    if(ps.length) start = Math.max(start, ...ps.map(p=>T.get(p).ef));  // empujado por predecesoras
+    t.es = start;
     t.ef = t.es + (Number(t.duration)||0);
+    t.ps = addDays(base, t.es);
+    t.pf = addDays(base, t.ef);
   }
   const projEnd = Math.max(0,...leaves.map(t=>t.ef||0));
   // backward pass
@@ -937,16 +995,6 @@ function calcCPM(){
     t.critical = Math.abs(t.slack) < 1e-6;
   }
 
-  // fechas planificadas desde inicio de proyecto (días calendario)
-  const startStr=document.getElementById('projStart').value;
-  if(startStr){
-    const base=new Date(startStr+'T00:00:00');
-    for(const t of leaves){
-      t.ps = addDays(base,t.es);
-      t.pf = addDays(base, Math.max(t.es, t.ef - (t.duration>0?0:0)) ); // fin = es+dur
-      t.pf = addDays(base, t.ef); // fin planificado (día siguiente al último de trabajo)
-    }
-  }
   // resúmenes: crítica si algún hijo lo es; fechas = span
   State.tasks.forEach((t,i)=>{
     if(isSummary(i)){
