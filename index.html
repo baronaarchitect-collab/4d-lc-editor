@@ -152,9 +152,9 @@
       <button id="tDown" title="Bajar">▼</button>
       <button id="tDel" title="Eliminar">🗑</button>
       <select id="wbsMode" title="Cómo agrupar la EDT generada desde el IFC">
-        <option value="type">Categoría › Tipo</option>
-        <option value="level-cat">Nivel › Categoría › Tipo</option>
+        <option value="level-cat" selected>Nivel › Capítulo › Tipo</option>
         <option value="level-type">Nivel › Tipo</option>
+        <option value="type">Capítulo › Tipo</option>
         <option value="level">Solo Nivel</option>
       </select>
       <button id="tWBS" title="Generar EDT desde el IFC con la agrupación elegida">🏗 EDT⇐IFC</button>
@@ -442,19 +442,67 @@ function ifcTypeName(code){
   catch(_){ return 'IFC('+code+')'; }
 }
 
+/* ---- ORDEN CONSTRUCTIVO DE CAPÍTULOS (categorías) ----
+   Secuencia según lo que se construye primero en obra. Puede ser sustituida
+   por el modelo PyTorch (learning-to-rank) vía construction_order.json. */
+const CONSTRUCTION_SEQUENCE = [
+  'IFCSITE','IFCGEOGRAPHICELEMENT','IFCCIVILELEMENT',
+  'IFCFOOTING','IFCPILE','IFCFOUNDATION',
+  'IFCCOLUMN',
+  'IFCBEAM','IFCSLAB','IFCPLATE','IFCROOF',
+  'IFCSTAIRFLIGHT','IFCSTAIR','IFCRAMPFLIGHT','IFCRAMP',
+  'IFCWALLSTANDARDCASE','IFCWALL','IFCCURTAINWALL','IFCMEMBER',
+  'IFCDOOR','IFCWINDOW',
+  'IFCRAILING',
+  'IFCPIPESEGMENT','IFCPIPEFITTING','IFCDUCTSEGMENT','IFCDUCTFITTING','IFCCABLECARRIER','IFCCABLESEGMENT',
+  'IFCFLOWSEGMENT','IFCFLOWFITTING','IFCFLOWTERMINAL','IFCFLOWCONTROLLER','IFCDISTRIBUTION',
+  'IFCVALVE','IFCPUMP','IFCTANK','IFCBOILER','IFCAIRTERMINAL','IFCSANITARYTERMINAL',
+  'IFCLIGHTFIXTURE','IFCOUTLET','IFCSWITCHINGDEVICE','IFCELECTRIC','IFCENERGYCONVERSION',
+  'IFCCOVERING',
+  'IFCFURNISHINGELEMENT','IFCFURNITURE','IFCSYSTEMFURNITURE',
+  'IFCELEMENTASSEMBLY','IFCBUILDINGELEMENTPROXY',
+  'IFCSPACE'
+];
+function normCat(s){ return (s||'').replace(/[^a-z0-9]/gi,'').toUpperCase(); }
+function constructionRank(catKey){
+  const up=normCat(catKey);
+  for(let i=0;i<CONSTRUCTION_SEQUENCE.length;i++){ if(up.startsWith(CONSTRUCTION_SEQUENCE[i])) return i; }
+  for(let i=0;i<CONSTRUCTION_SEQUENCE.length;i++){ if(up.includes(CONSTRUCTION_SEQUENCE[i])) return i+0.4; }
+  return CONSTRUCTION_SEQUENCE.length + 10;   // desconocido -> al final
+}
+function natNum(s){ const m=String(s).match(/-?\d+(?:[.,]\d+)?/); return m? parseFloat(m[0].replace(',','.')) : NaN; }
+
+// Si existe construction_order.json (generado por el modelo PyTorch), reemplaza la secuencia.
+fetch('construction_order.json').then(r=>r.ok?r.json():null).then(j=>{
+  if(j && Array.isArray(j.sequence) && j.sequence.length){
+    CONSTRUCTION_SEQUENCE.length=0;
+    for(const s of j.sequence) CONSTRUCTION_SEQUENCE.push(normCat(s));
+    console.log('Orden constructivo cargado del modelo PyTorch:', j.sequence.length, 'capítulos');
+  }
+}).catch(()=>{});
+
 /* Claves de agrupación disponibles */
 function wbsKeys(mode){
-  const kCat  = {fn:e=>prettyCat(e.category||'Otros')};
-  const kType = {fn:e=>e.typeName||'(sin tipo definido)'};
   const storeyElev = window.__storeyElev || new Map();
-  const kLevel= {fn:e=>e.storey||'Sin nivel',
-                 cmp:(a,b)=>((storeyElev.get(a)??1e9)-(storeyElev.get(b)??1e9)) || String(a).localeCompare(String(b))};
+  // NIVEL primero: ordena por elevación real; si no hay, por el número del nombre ("Nivel 1" < "Nivel 2")
+  const kLevel= {fn:e=>e.storey||'Sin nivel', cmp:(a,b)=>{
+    const ea=storeyElev.get(a), eb=storeyElev.get(b);
+    if(ea!=null && eb!=null && ea!==eb) return ea-eb;
+    const na=natNum(a), nb=natNum(b);
+    if(!isNaN(na) && !isNaN(nb) && na!==nb) return na-nb;
+    return String(a).localeCompare(String(b));
+  }};
+  // CAPÍTULO (categoría): ordena por secuencia constructiva real
+  const kCat  = {fn:e=>prettyCat(e.category||'Otros'),
+                 cmp:(a,b)=> (constructionRank(a)-constructionRank(b)) || String(a).localeCompare(String(b))};
+  // TIPO (actividad hoja): alfabético
+  const kType = {fn:e=>e.typeName||'(sin tipo definido)', cmp:(a,b)=>String(a).localeCompare(String(b))};
   switch(mode){
-    case 'level-cat':  return [kLevel, kCat, kType];   // Nivel › Categoría › Tipo
+    case 'level-cat':  return [kLevel, kCat, kType];   // Nivel › Capítulo(construcción) › Tipo
     case 'level-type': return [kLevel, kType];          // Nivel › Tipo
     case 'level':      return [kLevel];                 // solo Nivel
     case 'type':       return [kType];                  // solo Tipo
-    default:           return [kCat, kType];            // Categoría › Tipo
+    default:           return [kCat, kType];            // Capítulo(construcción) › Tipo
   }
 }
 
