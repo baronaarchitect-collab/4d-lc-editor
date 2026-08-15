@@ -36,17 +36,19 @@
   #schedToolbar{display:flex;flex-wrap:wrap;gap:5px;padding:8px;border-bottom:1px solid var(--line);align-items:center;}
   #schedToolbar button{padding:5px 8px;}
   #tableWrap{flex:1;overflow:auto;}
-  table.sched{border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap;}
-  table.sched th{position:sticky;top:0;background:var(--panel2);border:1px solid var(--line);padding:5px 6px;font-weight:600;color:var(--muted);text-align:left;z-index:2;}
-  table.sched td{border:1px solid var(--line);padding:0;}
+  table.sched{border-collapse:collapse;font-size:12px;white-space:nowrap;table-layout:fixed;}
+  table.sched th{position:sticky;top:0;background:var(--panel2);border:1px solid var(--line);padding:5px 6px;font-weight:600;color:var(--muted);text-align:left;z-index:2;overflow:hidden;text-overflow:ellipsis;}
+  table.sched td{border:1px solid var(--line);padding:0;overflow:hidden;}
+  .colres{position:absolute;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;z-index:3;}
+  .colres:hover{background:var(--accent);}
   table.sched tr{background:var(--row);}
   table.sched tr.sel{background:var(--rowsel);}
   table.sched tr.summary{font-weight:700;background:#121a26;}
   table.sched tr.critical td.namecell{border-left:3px solid var(--crit);}
   table.sched td .cell{padding:4px 6px;min-height:24px;display:flex;align-items:center;gap:4px;}
   table.sched td input{width:100%;border:none;background:transparent;padding:4px 5px;}
-  table.sched td input[type=date]{width:120px;color-scheme:dark;}
-  table.sched td input[type=number]{width:60px;}
+  table.sched td input[type=date]{width:100%;color-scheme:dark;}
+  table.sched td input[type=number]{width:100%;}
   .nameinput{font-weight:inherit;}
   .indent{display:inline-block;}
   .twist{color:var(--muted);width:12px;display:inline-block;cursor:pointer;user-select:none;}
@@ -136,6 +138,8 @@
   <label class="hint">Inicio proyecto <input type="date" id="projStart"></label>
   <div class="spacer"></div>
   <button id="btn4D" title="Simulación 4D">▶ Simulación 4D</button>
+  <button id="btnRotX" title="Girar el modelo 90° en X (corrige el modelo volteado)">⟲ X</button>
+  <button id="btnRotZ" title="Girar el modelo 90° en Z">⟲ Z</button>
   <button id="btnFit" title="Encuadrar">⤢ Encuadrar</button>
 </div>
 
@@ -404,17 +408,7 @@ async function loadIFC(file){
 
   ifcAPI.CloseModel(modelID);
 
-  // centroides en espacio mundo
-  modelRoot.updateMatrixWorld(true);
-  for(const [id,e] of Elements){
-    const box = new THREE.Box3();
-    for(const mesh of e.meshes){
-      mesh.geometry.computeBoundingBox();
-      const b = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
-      box.union(b);
-    }
-    e.centroid = box.getCenter(new THREE.Vector3());
-  }
+  computeCentroids();
 
   hideLoader();
   document.getElementById('hEls').textContent = count;
@@ -593,6 +587,28 @@ function fitView(){
   grid.position.set(center.x, box.min.y, center.z);
 }
 document.getElementById('btnFit').onclick = fitView;
+
+// recalcula centroides (mundo) para la selección por caja tras cargar o girar
+function computeCentroids(){
+  modelRoot.updateMatrixWorld(true);
+  for(const [id,e] of Elements){
+    const box = new THREE.Box3();
+    for(const mesh of e.meshes){
+      if(!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      box.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+    }
+    e.centroid = box.getCenter(new THREE.Vector3());
+  }
+}
+// girar el modelo para corregir orientación de importación (pasos de 90°)
+function rotateModel(axis){
+  if(axis==='x') modelRoot.rotation.x += Math.PI/2;
+  if(axis==='z') modelRoot.rotation.z += Math.PI/2;
+  computeCentroids();
+  fitView();
+}
+document.getElementById('btnRotX').onclick = ()=>rotateModel('x');
+document.getElementById('btnRotZ').onclick = ()=>rotateModel('z');
 
 /* ============================================================= *
  *  SELECCIÓN POR CAJA (RUBBER BAND)  — arrastre sostenido
@@ -865,18 +881,36 @@ function renderTable(){
       <td><input type="date" data-f="pf" data-id="${t.id}" value="${fmt(t.pf)}"></td>
       <td><input type="date" data-f="as" data-id="${t.id}" value="${fmt(t.as)}"></td>
       <td><input type="date" data-f="af" data-id="${t.id}" value="${fmt(t.af)}"></td>
-      <td><input type="text" data-f="pred" data-id="${t.id}" value="${escapeHtml(t.pred)}" placeholder="ej: 3,4" style="width:60px" ${summ?'disabled':''}></td>
+      <td><input type="text" data-f="pred" data-id="${t.id}" value="${escapeHtml(t.pred)}" placeholder="ej: 3,4" ${summ?'disabled':''}></td>
       <td class="critcell">${critBadge}${elc}</td>
     </tr>`;
   }).join('');
-  tableWrap.innerHTML = `<table class="sched">
-    <thead><tr>
-      <th>#</th><th>Nombre de actividad (EDT)</th><th>Dur (d)</th>
-      <th>Inicio Plan.</th><th>Fin Plan.</th><th>Inicio Real</th><th>Fin Real</th><th>Pred.</th><th>Estado</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+  if(!State.colW) State.colW=[40,300,60,120,120,120,120,80,90];
+  const COLS=['#','Nombre de actividad (EDT)','Dur (d)','Inicio Plan.','Fin Plan.','Inicio Real','Fin Real','Pred.','Estado'];
+  const totalW=State.colW.reduce((a,b)=>a+b,0);
+  const colgroup=`<colgroup>${State.colW.map((w,i)=>`<col data-c="${i}" style="width:${w}px">`).join('')}</colgroup>`;
+  const thead=`<thead><tr>${COLS.map((c,i)=>`<th>${c}<span class="colres" data-c="${i}"></span></th>`).join('')}</tr></thead>`;
+  tableWrap.innerHTML = `<table class="sched" style="width:${totalW}px">${colgroup}${thead}<tbody>${rows}</tbody></table>`;
   bindTable();
+  bindColResizers();
   updateSelUI();
   renderGantt();
+}
+
+function bindColResizers(){
+  tableWrap.querySelectorAll('.colres').forEach(h=>{
+    h.addEventListener('mousedown',e=>{
+      e.preventDefault(); e.stopPropagation();
+      const ci=Number(h.dataset.c), startX=e.clientX, startW=State.colW[ci];
+      const col=tableWrap.querySelector(`col[data-c="${ci}"]`);
+      const table=tableWrap.querySelector('table.sched');
+      const onMove=ev=>{ const w=Math.max(30,startW+(ev.clientX-startX)); State.colW[ci]=w;
+        if(col) col.style.width=w+'px'; if(table) table.style.width=State.colW.reduce((a,b)=>a+b,0)+'px'; };
+      const onUp=()=>{ window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp); document.body.style.cursor=''; };
+      document.body.style.cursor='col-resize';
+      window.addEventListener('mousemove',onMove); window.addEventListener('mouseup',onUp);
+    });
+  });
 }
 
 function isHidden(idx){
