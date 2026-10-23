@@ -60,6 +60,12 @@
   .critcell{text-align:center;}
 
   /* overlays */
+  #noviz{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:8;
+    background:linear-gradient(160deg,#dcebf7,#c3dcf0);}
+  #noviz .nvcard{background:rgba(255,255,255,.75);border:1px solid #9cc0e0;border-radius:14px;padding:26px 30px;text-align:center;max-width:380px;box-shadow:0 10px 30px rgba(30,60,100,.18);}
+  #noviz .nvicon{font-size:40px;margin-bottom:8px;}
+  #noviz .nvt{font-weight:700;color:#14334f;font-size:15px;margin-bottom:6px;}
+  #noviz .nvs{color:#3a5b78;font-size:12px;line-height:1.6;}
   #rubber{position:absolute;border:1.5px dashed var(--accent);background:rgba(59,130,246,.12);pointer-events:none;display:none;z-index:10;}
   #hud{position:absolute;left:10px;top:10px;background:rgba(12,16,23,.82);border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px;pointer-events:none;max-width:340px;line-height:1.5;}
   #hud b{color:var(--accent2);}
@@ -185,6 +191,13 @@
   <div id="dragbar"></div>
   <div id="right">
     <div id="viewport"></div>
+    <div id="noviz">
+      <div class="nvcard">
+        <div class="nvicon">🏢</div>
+        <div class="nvt">El modelo 3D permanece en el visor BIM</div>
+        <div class="nvs">Aquí gestionas la <b>data</b>: EDT, cantidades y el Gantt 4D.<br>Vuelve a la pestaña del visor para ver y navegar el 3D.</div>
+      </div>
+    </div>
     <div id="rubber"></div>
     <div id="hud">
       <div>Elementos: <b id="hEls">0</b> · Seleccionados: <b id="hSel">0</b></div>
@@ -289,7 +302,7 @@ renderer.setSize(viewport.clientWidth, viewport.clientHeight);
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0e1116);
+scene.background = new THREE.Color(0xdcebf7);   // azul "Cielo" como el visor BIM
 
 const camera = new THREE.PerspectiveCamera(55, viewport.clientWidth/viewport.clientHeight, 0.1, 100000);
 camera.position.set(30,30,30);
@@ -301,7 +314,7 @@ controls.dampingFactor = 0.08;
 scene.add(new THREE.AmbientLight(0xffffff,0.75));
 const dir = new THREE.DirectionalLight(0xffffff,0.9); dir.position.set(50,80,40); scene.add(dir);
 const dir2 = new THREE.DirectionalLight(0xffffff,0.4); dir2.position.set(-40,20,-30); scene.add(dir2);
-const grid = new THREE.GridHelper(200,40,0x334155,0x1e293b); scene.add(grid);
+const grid = new THREE.GridHelper(200,40,0xb3c8db,0xcfdeec); scene.add(grid);
 
 // grupo raíz del modelo (Z-up -> Y-up)
 const modelRoot = new THREE.Group();
@@ -311,8 +324,14 @@ scene.add(modelRoot);
 // registro de elementos: expressID -> {meshes:[], baseColor:THREE.Color, centroid:Vector3, name, type}
 const Elements = new Map();
 
+let dataOnly=false;   // modo solo-datos (sin geometría): el 3D vive en el visor
+function setDataOnly(on){
+  dataOnly=on;
+  const nv=document.getElementById('noviz'); if(nv) nv.style.display=on?'flex':'none';
+}
 function animate(){
   requestAnimationFrame(animate);
+  if(dataOnly) return;              // no gastar GPU si no hay modelo cargado aquí
   controls.update();
   renderer.render(scene,camera);
 }
@@ -348,6 +367,7 @@ function showLoader(txt){ document.getElementById('loadTxt').textContent=txt||'P
 function hideLoader(){ document.getElementById('loader').style.display='none'; }
 
 async function loadIFC(file){
+  window.__fromVisor=false; setDataOnly(false);   // importación local con geometría: reactivar 3D
   if(!ifcReady){ showLoader('Inicializando motor IFC…'); while(!ifcReady) await new Promise(r=>setTimeout(r,100)); }
   showLoader('Leyendo '+file.name+'…');
   await new Promise(r=>setTimeout(r,30));
@@ -524,6 +544,26 @@ function constructionRank(catKey){
 }
 function natNum(s){ const m=String(s).match(/-?\d+(?:[.,]\d+)?/); return m? parseFloat(m[0].replace(',','.')) : NaN; }
 
+/* Aplana los nombres de nivel: "Piso 1", "Nivel 1", "Planta piso 1" -> "Nivel 1".
+   Devuelve {name, order} para agrupar y ordenar de forma consistente. */
+function normalizeLevel(raw){
+  const s=(raw||'').toString().trim();
+  if(!s) return {name:'Sin nivel', order:9000};
+  const low=s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');  // sin acentos
+  const m=low.match(/-?\d+(?:[.,]\d+)?/); const num=m?parseFloat(m[0].replace(',','.')):null;
+  if(/cubierta|azotea|terraza|roof|tapa/.test(low)) return {name:'Cubierta', order:5000};
+  if(/cimentacion|cimiento|fundacion|zapata|footing|foundation/.test(low)) return {name:'Cimentación', order:-5000};
+  if(/sotano|subsuelo|basement|semisotano|parqueadero|garaje/.test(low)){
+    const n=num!=null?Math.abs(num):1; return {name:'Sótano '+n, order:-1000-n};
+  }
+  if(/planta baja|p\.?\s?b\.?|ground|nivel\s*0|piso\s*0/.test(low)) return {name:'Planta baja', order:0};
+  const words={primer:1,primero:1,segundo:2,tercer:3,tercero:3,cuarto:4,quinto:5,sexto:6,septimo:7,octavo:8,noveno:9,decimo:10};
+  for(const w in words){ if(new RegExp('\\b'+w).test(low)) return {name:'Nivel '+words[w], order:words[w]}; }
+  if(num!=null) return {name:'Nivel '+num, order:num};
+  return {name:s, order:4000};   // sin número reconocible: se deja tal cual
+}
+function cmpLevel(a,b){ const oa=normalizeLevel(a).order, ob=normalizeLevel(b).order; return oa!==ob? oa-ob : String(a).localeCompare(String(b)); }
+
 // Si existe construction_order.json (generado por el modelo PyTorch), reemplaza la secuencia.
 fetch('construction_order.json').then(r=>r.ok?r.json():null).then(j=>{
   if(j && Array.isArray(j.sequence) && j.sequence.length){
@@ -537,13 +577,7 @@ fetch('construction_order.json').then(r=>r.ok?r.json():null).then(j=>{
 function wbsKeys(mode){
   const storeyElev = window.__storeyElev || new Map();
   // NIVEL primero: ordena por elevación real; si no hay, por el número del nombre ("Nivel 1" < "Nivel 2")
-  const kLevel= {fn:e=>e.storey||'Sin nivel', cmp:(a,b)=>{
-    const ea=storeyElev.get(a), eb=storeyElev.get(b);
-    if(ea!=null && eb!=null && ea!==eb) return ea-eb;
-    const na=natNum(a), nb=natNum(b);
-    if(!isNaN(na) && !isNaN(nb) && na!==nb) return na-nb;
-    return String(a).localeCompare(String(b));
-  }};
+  const kLevel= {fn:e=>normalizeLevel(e.storey).name, cmp:cmpLevel};
   // CAPÍTULO (categoría): ordena por secuencia constructiva real
   const kCat  = {fn:e=>prettyCat(e.category||'Otros'),
                  cmp:(a,b)=> (constructionRank(a)-constructionRank(b)) || String(a).localeCompare(String(b))};
@@ -627,7 +661,7 @@ window.addEventListener('message', (ev)=>{
 
 // claves de agrupación operando sobre grupos {lvl,cat,typ,count,q}
 function groupKeys(mode){
-  const kLevel={fn:g=>g.lvl||'Sin nivel', cmp:(a,b)=>{ const na=natNum(a),nb=natNum(b); if(!isNaN(na)&&!isNaN(nb)&&na!==nb)return na-nb; return String(a).localeCompare(String(b)); }};
+  const kLevel={fn:g=>normalizeLevel(g.lvl).name, cmp:cmpLevel};
   const kCat  ={fn:g=>g.cat||'Otros', cmp:(a,b)=>(constructionRank(a)-constructionRank(b))||String(a).localeCompare(String(b))};
   const kTyp  ={fn:g=>g.typ||'(sin tipo)', cmp:(a,b)=>String(a).localeCompare(String(b))};
   switch(mode){
@@ -714,6 +748,7 @@ function buildFromPlan(rows, payload){
   State.seq=Math.max(State.seq, tasks.length+2);
   State.selectedTaskId=tasks[0].id;
   window.__fromVisor=true;
+  setDataOnly(true);   // el 3D vive en el visor; aquí solo data (3D en pausa)
   if(!document.getElementById('projStart').value) document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
   document.getElementById('hEls').textContent=(payload.groups||[]).reduce((s,g)=>s+(g.count||0),0).toLocaleString('es');
   document.getElementById('hHint').textContent=`EDT creada desde el visor: ${payload.models?.length||0} modelo(s), ${tasks.length-1} nodos. El 3D permanece en el visor.`;
@@ -996,6 +1031,7 @@ document.getElementById('tDel').onclick=()=>{
 
 document.getElementById('tDemo').onclick=loadDemo;
 function loadDemo(){
+  window.__fromVisor=false; setDataOnly(false);
   State.tasks=[]; State.seq=1;
   const mk=(name,level,dur,pred)=>{const t=newTask(level);t.name=name;t.duration=dur;t.pred=pred||'';return t;};
   State.tasks.push(mk('PROYECTO EDIFICIO',0,0));
@@ -1050,8 +1086,7 @@ function renderTable(){
       elc = summ?'' : `<span class="elcount" data-el="${t.id}" title="Ver/gestionar elementos asignados">${t.elements.length}⬚</span>`;
     }
     const critBadge = t.critical? '<span class="cbadge">CRÍTICA</span>':'';
-    // ocultar si un ancestro está colapsado
-    if(isHidden(i)) return '';
+    // Todas las filas se renderizan; el colapso se hace por CSS (applyCollapse) sin reconstruir.
     return `<tr class="${scls} ${sel} ${crit}" data-row="${t.id}">
       <td class="idcell">${i+1}</td>
       <td class="namecell"><div class="cell">${indent}${twist}${swatch}
@@ -1075,6 +1110,33 @@ function renderTable(){
   bindColResizers();
   updateSelUI();
   renderGantt();
+  applyCollapse();
+}
+
+/* Oculta/muestra filas colapsadas por CSS, sin reconstruir el DOM (rápido). */
+function computeHidden(){
+  const hidden=new Set(); let collapseLevel=-1;
+  for(let i=0;i<State.tasks.length;i++){
+    const t=State.tasks[i]; let h=false;
+    if(collapseLevel>=0){ if(t.level>collapseLevel) h=true; else collapseLevel=-1; }
+    if(h) hidden.add(t.id);
+    else if(t.collapsed && isSummary(i)) collapseLevel=t.level;
+  }
+  return hidden;
+}
+function applyCollapse(){
+  const hidden=computeHidden();
+  if(tableWrap) tableWrap.querySelectorAll('tr[data-row]').forEach(r=>{
+    const id=Number(r.dataset.row);
+    r.style.display = hidden.has(id)?'none':'';
+    const tw=r.querySelector('.twist[data-tw]'); if(tw){ const t=getTask(id); if(t) tw.textContent=t.collapsed?'▸':'▾'; }
+  });
+  const gb=document.getElementById('ganttBody');
+  if(gb) gb.querySelectorAll('.grow[data-grow]').forEach(r=>{
+    const id=Number(r.dataset.grow);
+    r.style.display = hidden.has(id)?'none':'';
+    const tw=r.querySelector('.gtw[data-gtw]'); if(tw){ const t=getTask(id); if(t) tw.textContent=t.collapsed?'▸':'▾'; }
+  });
 }
 
 function bindColResizers(){
@@ -1150,7 +1212,7 @@ function bindTable(){
     });
   });
   tableWrap.querySelectorAll('.twist[data-tw]').forEach(tw=>{
-    tw.addEventListener('click',e=>{ e.stopPropagation(); const t=getTask(Number(tw.dataset.tw)); t.collapsed=!t.collapsed; renderTable(); });
+    tw.addEventListener('click',e=>{ e.stopPropagation(); const t=getTask(Number(tw.dataset.tw)); t.collapsed=!t.collapsed; applyCollapse(); });
   });
   tableWrap.querySelectorAll('.elcount[data-el]').forEach(b=>{
     b.addEventListener('click',e=>{ e.stopPropagation(); openElementModal(Number(b.dataset.el)); });
@@ -1343,7 +1405,6 @@ function renderGantt(){
 
   let rowsHtml='';
   State.tasks.forEach((t,i)=>{
-    if(isHidden(i)) return;
     const summ=isSummary(i);
     const sel=t.id===State.selectedTaskId?'selg':'';
     const indent=`<span style="display:inline-block;width:${t.level*12}px;flex-shrink:0"></span>`;
@@ -1370,6 +1431,7 @@ function renderGantt(){
     ${rowsHtml}${todayLine}
   </div>`;
   bindGantt();
+  applyCollapse();
 }
 
 function bindGantt(){
@@ -1389,7 +1451,7 @@ function bindGantt(){
     });
   });
   body.querySelectorAll('.gtw[data-gtw]').forEach(tw=>{
-    tw.addEventListener('click',e=>{ e.stopPropagation(); const t=getTask(Number(tw.dataset.gtw)); t.collapsed=!t.collapsed; renderTable(); });
+    tw.addEventListener('click',e=>{ e.stopPropagation(); const t=getTask(Number(tw.dataset.gtw)); t.collapsed=!t.collapsed; applyCollapse(); });
   });
   body.querySelectorAll('.gbar[data-bar]').forEach(bar=>{
     bar.addEventListener('dragstart',e=>{ e.dataTransfer.setData('text/plain',bar.dataset.bar); e.dataTransfer.effectAllowed='link'; bar.style.opacity='.45'; });
