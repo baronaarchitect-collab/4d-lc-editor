@@ -29,7 +29,12 @@
   #rightcol{flex:1;display:flex;flex-direction:column;min-width:0;}
   #vdragbar{height:5px;cursor:row-resize;background:var(--line);flex-shrink:0;}
   #vdragbar:hover{background:var(--accent);}
-  #vlabel{position:absolute;left:10px;top:8px;z-index:9;font-size:11px;font-weight:700;color:#14334f;background:rgba(255,255,255,.7);border:1px solid #9cc0e0;border-radius:6px;padding:2px 8px;pointer-events:none;}
+  #vbar{position:absolute;left:10px;top:8px;z-index:9;display:flex;gap:6px;align-items:center;}
+  #vlabel{font-size:11px;font-weight:700;color:#14334f;background:rgba(255,255,255,.7);border:1px solid #9cc0e0;border-radius:6px;padding:3px 8px;}
+  #vbar button{font-size:11px;padding:3px 9px;background:rgba(255,255,255,.85);color:#14334f;border:1px solid #9cc0e0;border-radius:6px;}
+  #vbar button:hover{background:#fff;border-color:var(--accent);}
+  #vbar button.active{background:#2da44e;border-color:#2da44e;color:#fff;}
+  #btnLoad3D{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
   #dragbar{width:5px;cursor:col-resize;background:var(--line);flex-shrink:0;}
   #dragbar:hover{background:var(--accent);}
   #right{height:300px;min-height:110px;flex-shrink:0;position:relative;min-width:0;background:#dcebf7;}
@@ -234,7 +239,11 @@
     </div>
     <div id="vdragbar" title="Arrastra para redimensionar el visor 3D"></div>
     <div id="right">
-      <div id="vlabel">🏢 Visor 3D</div>
+      <div id="vbar">
+        <span id="vlabel">🏢 Visor 3D</span>
+        <button id="btnLoad3D" title="Traer el modelo IFC desde Cloudflare (el mismo del visor)">⬇ Cargar modelo 3D</button>
+        <button id="btn3DToggle" title="Encender/apagar el modelo 3D">👁 3D: ON</button>
+      </div>
       <div id="viewport"></div>
     <div id="noviz">
       <div class="nvcard">
@@ -415,26 +424,16 @@ document.getElementById('fileInput').onchange = async e=>{
 function showLoader(txt){ document.getElementById('loadTxt').textContent=txt||'Procesando…'; document.getElementById('loader').style.display='flex'; }
 function hideLoader(){ document.getElementById('loader').style.display='none'; }
 
-async function loadIFC(file){
-  window.__fromVisor=false; setDataOnly(false);   // importación local con geometría: reactivar 3D
-  if(!ifcReady){ showLoader('Inicializando motor IFC…'); while(!ifcReady) await new Promise(r=>setTimeout(r,100)); }
-  showLoader('Leyendo '+file.name+'…');
-  await new Promise(r=>setTimeout(r,30));
-
-  // limpiar modelo anterior
-  clearModel();
-
-  const buffer = new Uint8Array(await file.arrayBuffer());
-  const modelID = ifcAPI.OpenModel(buffer, {COORDINATE_TO_ORIGIN:true});
-
-  showLoader('Construyendo geometría 3D…');
-  await new Promise(r=>setTimeout(r,30));
-
-  let count=0;
+/* Ingesta UN modelo IFC a Elements. modelIndex desplaza los expressID para no
+   colisionar entre modelos (relay multi-modelo). Captura GlobalId para relink. */
+async function ingestModel(buffer, modelIndex){
+  const off = (modelIndex||0) * 100000000;
+  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const modelID = ifcAPI.OpenModel(u8, {COORDINATE_TO_ORIGIN:true});
+  const mine=[];
   ifcAPI.StreamAllMeshes(modelID,(flatMesh)=>{
-    const expressID = flatMesh.expressID;
-    const geoms = flatMesh.geometries;
-    const meshes=[];
+    const expressID = flatMesh.expressID; const uid = off + expressID;
+    const geoms = flatMesh.geometries; const meshes=[];
     for(let i=0;i<geoms.size();i++){
       const pg = geoms.get(i);
       const geom = ifcAPI.GetGeometry(modelID, pg.geometryExpressID);
@@ -442,78 +441,77 @@ async function loadIFC(file){
       const idx = ifcAPI.GetIndexArray(geom.GetIndexData(), geom.GetIndexDataSize());
       const bg = ifcBufferGeometry(verts, idx);
       const c = pg.color;
-      const mat = new THREE.MeshLambertMaterial({
-        color:new THREE.Color(c.x,c.y,c.z),
-        transparent: c.w<1, opacity:c.w,
-        side:THREE.DoubleSide
-      });
+      const mat = new THREE.MeshLambertMaterial({ color:new THREE.Color(c.x,c.y,c.z), transparent:c.w<1, opacity:c.w, side:THREE.DoubleSide });
       const mesh = new THREE.Mesh(bg, mat);
-      const m = new THREE.Matrix4(); m.fromArray(pg.flatTransformation);
-      mesh.applyMatrix4(m);
-      mesh.userData.expressID = expressID;
-      modelRoot.add(mesh);
-      meshes.push(mesh);
-      geom.delete();
+      const m = new THREE.Matrix4(); m.fromArray(pg.flatTransformation); mesh.applyMatrix4(m);
+      mesh.userData.expressID = uid;
+      modelRoot.add(mesh); meshes.push(mesh); geom.delete();
     }
     if(meshes.length){
-      const base = meshes[0].material.color.clone();
-      Elements.set(expressID,{meshes, baseColor:base, centroid:null, name:null, type:null, category:null, typeName:null, objType:null, storey:null, storeyElev:null});
-      count++;
+      Elements.set(uid,{meshes, baseColor:meshes[0].material.color.clone(), centroid:null, name:null, type:null, category:null, typeName:null, objType:null, storey:null, storeyElev:null, gid:null, realId:expressID, mi:modelIndex});
+      mine.push(uid);
     }
   });
-
-  // metadatos (nombre / categoría IFC / ObjectType)
-  showLoader('Leyendo propiedades…');
-  await new Promise(r=>setTimeout(r,10));
-  for(const [id,e] of Elements){
+  for(const uid of mine){
+    const e=Elements.get(uid);
     try{
-      const line = ifcAPI.GetLine(modelID, id);
-      e.name = (line.Name && line.Name.value) ? line.Name.value : ('#'+id);
-      e.category = ifcTypeName(line.type);
-      e.type = e.category;
+      const line = ifcAPI.GetLine(modelID, e.realId);
+      e.name = (line.Name && line.Name.value) ? line.Name.value : ('#'+e.realId);
+      e.category = ifcTypeName(line.type); e.type = e.category;
       e.objType = (line.ObjectType && line.ObjectType.value) ? line.ObjectType.value : null;
-    }catch(_){ e.name='#'+id; e.type='Elemento'; e.category='Otros'; }
+      e.gid = (line.GlobalId && line.GlobalId.value) ? line.GlobalId.value : null;
+    }catch(_){ e.name='#'+e.realId; e.type='Elemento'; e.category='Otros'; }
   }
-
-  // TIPOS: relación IfcRelDefinesByType (elemento -> tipo)
-  showLoader('Leyendo tipos…');
   try{
     const rels = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELDEFINESBYTYPE);
     for(let i=0;i<rels.size();i++){
       const rel = ifcAPI.GetLine(modelID, rels.get(i));
-      let tName = null;
-      if(rel.RelatingType && rel.RelatingType.value){
-        try{ const to = ifcAPI.GetLine(modelID, rel.RelatingType.value);
-          tName = (to.Name && to.Name.value) ? to.Name.value : ifcTypeName(to.type); }catch(_){}
-      }
-      const objs = rel.RelatedObjects || [];
-      for(const o of objs){ if(o && o.value!=null){ const e=Elements.get(o.value); if(e && tName) e.typeName=tName; } }
+      let tName=null;
+      if(rel.RelatingType && rel.RelatingType.value){ try{ const to=ifcAPI.GetLine(modelID, rel.RelatingType.value); tName=(to.Name&&to.Name.value)?to.Name.value:ifcTypeName(to.type);}catch(_){} }
+      const objs=rel.RelatedObjects||[];
+      for(const o of objs){ if(o && o.value!=null){ const e=Elements.get(off+o.value); if(e && tName) e.typeName=tName; } }
     }
   }catch(_){}
-  for(const [id,e] of Elements){ if(!e.typeName) e.typeName = e.objType || '(sin tipo definido)'; }
-
-  // NIVELES: relación IfcRelContainedInSpatialStructure (elemento -> planta/nivel)
-  showLoader('Leyendo niveles…');
-  const storeyElev = new Map();
+  for(const uid of mine){ const e=Elements.get(uid); if(!e.typeName) e.typeName=e.objType||'(sin tipo definido)'; }
+  if(!window.__storeyElev) window.__storeyElev=new Map();
   try{
     const relsC = ifcAPI.GetLineIDsWithType(modelID, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
     for(let i=0;i<relsC.size();i++){
       const rel = ifcAPI.GetLine(modelID, relsC.get(i));
       if(!rel.RelatingStructure || rel.RelatingStructure.value==null) continue;
       let sName=null, sElev=null;
-      try{
-        const st = ifcAPI.GetLine(modelID, rel.RelatingStructure.value);
-        sName = (st.Name && st.Name.value) ? st.Name.value : ifcTypeName(st.type);
-        if(st.Elevation && st.Elevation.value!=null) sElev = Number(st.Elevation.value);
-      }catch(_){}
-      if(sName!=null) storeyElev.set(sName, sElev);
-      const objs = rel.RelatedElements || [];
-      for(const o of objs){ if(o && o.value!=null){ const e=Elements.get(o.value); if(e){ e.storey=sName; e.storeyElev=sElev; } } }
+      try{ const st=ifcAPI.GetLine(modelID, rel.RelatingStructure.value); sName=(st.Name&&st.Name.value)?st.Name.value:ifcTypeName(st.type); if(st.Elevation&&st.Elevation.value!=null)sElev=Number(st.Elevation.value);}catch(_){}
+      if(sName!=null) window.__storeyElev.set(sName,sElev);
+      const objs=rel.RelatedElements||[];
+      for(const o of objs){ if(o && o.value!=null){ const e=Elements.get(off+o.value); if(e){ e.storey=sName; e.storeyElev=sElev; } } }
     }
   }catch(_){}
-  window.__storeyElev = storeyElev;   // usado por buildWBSFromIFC para ordenar por elevación
-
   ifcAPI.CloseModel(modelID);
+  return mine.length;
+}
+
+/* Reconstruye las asignaciones actividad↔elementos por GlobalId tras (re)cargar geometría */
+function relinkAssignments(){
+  const gidIndex=new Map();
+  for(const [uid,e] of Elements){ if(e.gid) gidIndex.set(e.gid, uid); }
+  for(const t of State.tasks){
+    if(t.gids && t.gids.length){ t.elements = t.gids.map(g=>gidIndex.get(g)).filter(v=>v!=null); }
+  }
+  applyElementColors();
+}
+
+async function loadIFC(file){
+  window.__fromVisor=false; setDataOnly(false);   // importación local con geometría: reactivar 3D
+  if(!ifcReady){ showLoader('Inicializando motor IFC…'); while(!ifcReady) await new Promise(r=>setTimeout(r,100)); }
+  showLoader('Leyendo '+file.name+'…');
+  await new Promise(r=>setTimeout(r,30));
+
+  clearModel();
+  window.__storeyElev = new Map();
+  const buffer = new Uint8Array(await file.arrayBuffer());
+  showLoader('Construyendo geometría 3D…');
+  await new Promise(r=>setTimeout(r,20));
+  const count = await ingestModel(buffer, 0);
 
   computeCentroids();
 
@@ -535,7 +533,9 @@ async function loadIFC(file){
   } else {
     document.getElementById('hHint').textContent = 'No se encontró geometría.';
   }
+  relinkAssignments();
   applyElementColors();
+  update3DControls();
 }
 
 function ifcTypeName(code){
@@ -700,18 +700,60 @@ try{ if(window.opener) window.opener.postMessage({type:'LC4D_READY'}, '*'); }cat
 window.addEventListener('message', (ev)=>{
   const d = ev.data;
   if(!d || typeof d!=='object') return;
+  if(window.opener && ev.source && ev.source!==window.opener) return;   // confianza: ventana que nos abrió
   if(d.type==='LC4D_IMPORT' && Array.isArray(d.groups)){
-    // confianza: proviene de la ventana que nos abrió
-    if(window.opener && ev.source && ev.source!==window.opener) return;
     INCOMING = d;
-    window.__visorOrigin = ev.origin || '*';   // para devolver selección al visor
+    window.__visorOrigin = ev.origin || '*';   // para devolver selección / pedir modelos
     openPreview(d);
     try{ ev.source && ev.source.postMessage({type:'LC4D_ACK'}, '*'); }catch(_){}
   }
+  else if(d.type==='LC4D_MODELS_BEGIN'){
+    clearModel(); window.__storeyElev=new Map(); window.__modelQ=Promise.resolve(); window.__modelN=0;
+    showLoader('Trayendo modelos del visor desde Cloudflare…');
+  }
+  else if(d.type==='LC4D_MODEL' && d.buffer){
+    const buf=d.buffer, name=d.name||'Modelo', mi=d.i||0;
+    window.__modelQ=(window.__modelQ||Promise.resolve()).then(async()=>{ showLoader('Construyendo 3D: '+name+'…'); try{ await ingestModel(new Uint8Array(buf), mi); }catch(e){ console.warn('ingest',e); } });
+  }
+  else if(d.type==='LC4D_MODEL_ERR'){ console.warn('Modelo no recibido:', d.name, d.error); }
+  else if(d.type==='LC4D_MODELS_DONE'){
+    (window.__modelQ||Promise.resolve()).then(()=>{
+      computeCentroids(); relinkAssignments();
+      setDataOnly(Elements.size===0);
+      document.getElementById('hEls').textContent=Elements.size.toLocaleString('es');
+      if(Elements.size) fitView();
+      hideLoader(); update3DControls();
+      document.getElementById('hHint').textContent = Elements.size
+        ? ('Modelo 3D cargado ('+Elements.size.toLocaleString('es')+' elem.). Selecciónalos y asígnalos a una actividad. La simulación 4D ya puede colorear el avance.')
+        : 'El visor no devolvió geometría (¿modelos sin cargar en el visor?).';
+    });
+  }
 });
+function requestModelsFromVisor(){
+  if(!visorConnected()){ alert('Abre este proyecto desde el visor BIM (botón ⏱ Crear 4D) para traer el modelo 3D.'); return; }
+  try{ window.opener.postMessage({type:'LC4D_REQUEST_MODELS'}, window.__visorOrigin||'*'); }
+  catch(e){ alert('No se pudo pedir el modelo al visor: '+e.message); }
+}
 // clave estable de un grupo (debe coincidir con el4DKey del visor)
 function groupKey(g){ return (g.lvl||'Sin nivel')+'\u0001'+(g.cat||'Otros')+'\u0001'+(g.typ||'(sin tipo)'); }
 function visorConnected(){ return !!window.opener && !!window.__fromVisor; }
+
+/* Encender/apagar el modelo 3D; al encender re-aplica las características asignadas */
+let model3DOn=true;
+function toggle3D(){
+  model3DOn=!model3DOn;
+  for(const [id,e] of Elements) e.meshes.forEach(m=>m.visible=model3DOn);
+  if(model3DOn) applyElementColors();   // re-aplica color por actividad / asignaciones a cada ID
+  update3DControls();
+}
+function update3DControls(){
+  const has=Elements.size>0;
+  const load=document.getElementById('btnLoad3D'), tog=document.getElementById('btn3DToggle');
+  if(load) load.style.display = (!has && visorConnected())?'inline-block':'none';
+  if(tog){ tog.style.display = has?'inline-block':'none'; tog.textContent='👁 3D: '+(model3DOn?'ON':'OFF'); tog.classList.toggle('active',model3DOn); }
+}
+document.getElementById('btnLoad3D').onclick=requestModelsFromVisor;
+document.getElementById('btn3DToggle').onclick=toggle3D;
 
 // claves de agrupación operando sobre grupos {lvl,cat,typ,count,q}
 function groupKeys(mode){
@@ -811,8 +853,10 @@ function buildFromPlan(rows, payload){
   if(!document.getElementById('projStart').value) document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
   document.getElementById('hEls').textContent=(payload.groups||[]).reduce((s,g)=>s+(g.count||0),0).toLocaleString('es');
   updateVisorBtn();
-  document.getElementById('hHint').textContent=`EDT creada desde el visor: ${payload.models?.length||0} modelo(s), ${tasks.length-1} nodos. El 3D permanece en el visor.`;
-  renderTable(); calcCPM(); openGantt();
+  document.getElementById('hHint').textContent=`EDT creada desde el visor: ${payload.models?.length||0} modelo(s), ${tasks.length-1} nodos. Trayendo el 3D desde Cloudflare…`;
+  renderTable(); calcCPM(); openGantt(); update3DControls();
+  // traer automáticamente el/los IFC desde Cloudflare (relay por el visor)
+  if(visorConnected()) setTimeout(requestModelsFromVisor, 300);
 }
 
 /* ---------- Sincronizar selección 4D → visor ---------- */
@@ -862,6 +906,7 @@ function clearModel(){
   Elements.clear();
   State.selectedElements.clear();
   updateSelUI();
+  if(typeof update3DControls==='function') update3DControls();
 }
 
 function fitView(){
@@ -1332,8 +1377,17 @@ function assignSelected(){
     if(!t.elements.includes(id)) t.elements.push(id);
   }
   State.selectedElements.clear();
+  syncGidsFromElements();
   updateSelUI(); renderTable(); applyElementColors();
   document.getElementById('hHint').textContent = `Asignados a "${t.name}". Total: ${t.elements.length} elementos.`;
+}
+// guarda las asignaciones por GlobalId (para restaurar al recargar o encender el 3D)
+function syncGidsFromElements(){
+  if(!Elements.size) return;
+  for(const t of State.tasks){
+    if(!t.elements) continue;
+    t.gids = t.elements.map(id=>{ const e=Elements.get(id); return e&&e.gid; }).filter(Boolean);
+  }
 }
 document.getElementById('btnAssign').onclick=assignSelected;
 document.getElementById('abAssign').onclick=assignSelected;
@@ -1349,7 +1403,7 @@ function openElementModal(taskId){
       <button data-rm="${id}">Quitar</button></div>`;
   }).join('');
   body.querySelectorAll('button[data-rm]').forEach(b=>{
-    b.onclick=()=>{ const id=Number(b.dataset.rm); const k=t.elements.indexOf(id); if(k>=0)t.elements.splice(k,1); openElementModal(taskId); renderTable(); applyElementColors(); };
+    b.onclick=()=>{ const id=Number(b.dataset.rm); const k=t.elements.indexOf(id); if(k>=0)t.elements.splice(k,1); syncGidsFromElements(); openElementModal(taskId); renderTable(); applyElementColors(); };
   });
   document.getElementById('modal').style.display='flex';
 }
@@ -1680,7 +1734,8 @@ function loadProject(id){
   setDataOnly(window.__fromVisor && Elements.size===0);
   document.getElementById('hEls').textContent=leafCount().toLocaleString('es');
   document.getElementById('hHint').textContent='Proyecto cargado. El 3D no se guarda: vuelve a importar el IFC si quieres ver/simular el modelo.';
-  renderTable(); openGantt(); applyElementColors(); updateVisorBtn(); updateProjName();
+  model3DOn=true;
+  renderTable(); openGantt(); applyElementColors(); updateVisorBtn(); updateProjName(); update3DControls();
   closeDashboard();
 }
 function deleteProject(id){
@@ -1732,6 +1787,7 @@ document.getElementById('dashboard').addEventListener('click',e=>{ if(e.target.i
 /* init */
 State.colW=null;
 renderTable();
+update3DControls();
 document.getElementById('projStart').value = new Date().toISOString().slice(0,10);
 // abrir el dashboard al inicio si hay proyectos guardados
 if(Object.keys(lsGet()).length) openDashboard();
