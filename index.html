@@ -26,9 +26,13 @@
   .spacer{flex:1;}
   #main{display:flex;flex:1;min-height:0;}
   #left{width:640px;min-width:360px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0;}
+  #rightcol{flex:1;display:flex;flex-direction:column;min-width:0;}
+  #vdragbar{height:5px;cursor:row-resize;background:var(--line);flex-shrink:0;}
+  #vdragbar:hover{background:var(--accent);}
+  #vlabel{position:absolute;left:10px;top:8px;z-index:9;font-size:11px;font-weight:700;color:#14334f;background:rgba(255,255,255,.7);border:1px solid #9cc0e0;border-radius:6px;padding:2px 8px;pointer-events:none;}
   #dragbar{width:5px;cursor:col-resize;background:var(--line);flex-shrink:0;}
   #dragbar:hover{background:var(--accent);}
-  #right{flex:1;position:relative;min-width:0;}
+  #right{height:300px;min-height:110px;flex-shrink:0;position:relative;min-width:0;background:#dcebf7;}
   #viewport{position:absolute;inset:0;}
   canvas{display:block;}
 
@@ -82,7 +86,7 @@
   #timeline.hidden{display:none;}
 
   /* ===== GANTT ===== */
-  #gantt{flex-shrink:0;height:300px;background:var(--panel);border-top:1px solid var(--line);display:flex;flex-direction:column;}
+  #gantt{flex:1;min-height:0;background:var(--panel);display:flex;flex-direction:column;}
   #gantt.collapsed{height:34px;}
   #ganttHead{height:34px;flex-shrink:0;display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--line);}
   #ganttHead .gtitle{font-weight:700;cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;color:var(--accent);}
@@ -127,6 +131,31 @@
   #modal .el:hover{background:var(--panel2);}
   #modal .el small{color:var(--muted);}
 
+  /* nombre de proyecto en la barra */
+  .projname{font-weight:600;color:var(--accent2);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #btnProjects{background:var(--accent);border-color:var(--accent);color:#fff;}
+
+  /* dashboard de proyectos */
+  #dashboard{position:fixed;inset:0;background:rgba(8,11,16,.92);z-index:70;display:none;align-items:center;justify-content:center;}
+  #dashboard.show{display:flex;}
+  .dbwrap{width:860px;max-width:94vw;max-height:88vh;background:var(--panel);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;box-shadow:0 14px 50px rgba(0,0,0,.6);}
+  .dbhead{display:flex;justify-content:space-between;align-items:flex-start;padding:16px 20px;border-bottom:1px solid var(--line);}
+  .dbtitle{font-weight:800;font-size:18px;color:var(--accent);}
+  .dbsub{color:var(--muted);font-size:12px;margin-top:4px;max-width:560px;line-height:1.5;}
+  .dbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;padding:18px 20px;overflow:auto;}
+  .dbcard{background:var(--row);border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:6px;cursor:pointer;transition:.12s;position:relative;min-height:118px;}
+  .dbcard:hover{border-color:var(--accent);background:#141b28;transform:translateY(-2px);}
+  .dbcard .nm{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .dbcard .meta{font-size:11px;color:var(--muted);line-height:1.6;flex:1;}
+  .dbcard .badge{display:inline-block;font-size:10px;padding:1px 7px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);}
+  .dbcard .badge.visor{background:#13351f;border-color:#2da44e;color:#5fd98a;}
+  .dbcard .badge.ifc{background:#1a2740;border-color:#3b82f6;color:#8fb8ff;}
+  .dbcard .acts{display:flex;gap:6px;margin-top:4px;}
+  .dbcard .acts button{font-size:11px;padding:3px 8px;}
+  .dbcard.new{align-items:center;justify-content:center;text-align:center;border-style:dashed;color:var(--muted);}
+  .dbcard.new:hover{color:var(--accent2);border-color:var(--accent2);}
+  .dbcard.new .plus{font-size:28px;}
+
   /* preview de importación desde el visor */
   #previewModal{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:60;}
   #previewModal .pvbox{background:var(--panel);border:1px solid var(--accent);border-radius:12px;width:680px;max-width:92vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.6);}
@@ -147,6 +176,9 @@
 
 <div id="top">
   <span class="logo">4D&nbsp;<b>LC</b>&nbsp;Editor</span>
+  <button id="btnProjects" title="Mis proyectos guardados">🗂 Proyectos</button>
+  <span id="projName" class="projname" title="Proyecto actual"></span>
+  <div class="sep"></div>
   <button id="btnImport">📂 Importar IFC</button>
   <input type="file" id="fileInput" accept=".ifc" style="display:none">
   <div class="sep"></div>
@@ -190,8 +222,20 @@
     <div id="tableWrap"></div>
   </div>
   <div id="dragbar"></div>
-  <div id="right">
-    <div id="viewport"></div>
+  <div id="rightcol">
+    <div id="gantt">
+      <div id="ganttHead">
+        <span class="gtitle">📊 Gantt 4D</span>
+        <span class="hint">Arrastra una barra sobre otra actividad para hacerla su <b>predecesora</b>. Resúmenes: ▾/▸.</span>
+        <div class="spacer"></div>
+        <label class="hint">Zoom <input type="range" id="ganttZoom" min="6" max="46" value="20" style="width:120px"></label>
+      </div>
+      <div id="ganttBody"></div>
+    </div>
+    <div id="vdragbar" title="Arrastra para redimensionar el visor 3D"></div>
+    <div id="right">
+      <div id="vlabel">🏢 Visor 3D</div>
+      <div id="viewport"></div>
     <div id="noviz">
       <div class="nvcard">
         <div class="nvicon">🏢</div>
@@ -218,18 +262,9 @@
       <button id="tlClose">✖</button>
     </div>
     <div id="loader"><div class="spin"></div><div id="loadTxt">Procesando IFC…</div></div>
-  </div>
-</div>
-
-<div id="gantt" class="collapsed">
-  <div id="ganttHead">
-    <span class="gtitle" id="ganttToggle">▸ Diagrama de Gantt</span>
-    <span class="hint">Arrastra una barra sobre otra actividad para hacerla su <b>predecesora</b>. Los resúmenes se colapsan con ▾/▸.</span>
-    <div class="spacer"></div>
-    <label class="hint">Zoom <input type="range" id="ganttZoom" min="6" max="46" value="20" style="width:120px"></label>
-  </div>
-  <div id="ganttBody"></div>
-</div>
+    </div><!-- #right (visor 3D, abajo) -->
+  </div><!-- #rightcol -->
+</div><!-- #main -->
 
 <div id="modal"><div class="box">
   <div class="hd"><span id="mTitle">Elementos</span><button id="mClose">Cerrar</button></div>
@@ -258,6 +293,19 @@
     <button id="pvConfirm" class="primary">✓ Confirmar y crear EDT</button>
   </div>
 </div></div>
+
+<div id="dashboard">
+  <div class="dbwrap">
+    <div class="dbhead">
+      <div>
+        <div class="dbtitle">🗂 Proyectos 4D</div>
+        <div class="dbsub">Se guardan en este navegador. Los proyectos traídos del visor y tus cambios quedan guardados automáticamente.</div>
+      </div>
+      <button id="dbClose" title="Cerrar">✖</button>
+    </div>
+    <div class="dbgrid" id="dbGrid"></div>
+  </div>
+</div>
 
 <script type="importmap">
 {
@@ -472,6 +520,7 @@ async function loadIFC(file){
   hideLoader();
   document.getElementById('hEls').textContent = count;
   fitView();
+  if(count>0 && !currentProjectId) createProject(file.name.replace(/\.ifc$/i,''), 'ifc');
 
   // EDT automática desde categorías + tipos del IFC
   if(count>0){
@@ -740,6 +789,8 @@ document.getElementById('pvConfirm').onclick=()=>{
 
 /* ---------- Construye la EDT + Gantt desde el plan confirmado ---------- */
 function buildFromPlan(rows, payload){
+  window.__incomingPayload = payload;
+  createProject(payload.project||'Proyecto del visor', 'visor');   // se guarda en el dashboard
   // modelo liviano (sin geometría): limpiamos geometría previa
   clearModel();
   const tasks=[]; const mk=(name,level)=>{ const t=newTask(level); t.name=name; return t; };
@@ -1061,7 +1112,8 @@ document.getElementById('tDel').onclick=()=>{
 
 document.getElementById('tDemo').onclick=loadDemo;
 function loadDemo(){
-  window.__fromVisor=false; setDataOnly(false);
+  window.__fromVisor=false; setDataOnly(false); window.__incomingPayload=null;
+  createProject('Ejemplo (edificio demo)', 'demo');
   State.tasks=[]; State.seq=1;
   const mk=(name,level,dur,pred)=>{const t=newTask(level);t.name=name;t.duration=dur;t.pred=pred||'';return t;};
   State.tasks.push(mk('PROYECTO EDIFICIO',0,0));
@@ -1141,6 +1193,7 @@ function renderTable(){
   updateSelUI();
   renderGantt();
   applyCollapse();
+  scheduleSave();
 }
 
 /* Oculta/muestra filas colapsadas por CSS, sin reconstruir el DOM (rápido). */
@@ -1386,20 +1439,12 @@ function addDays(base,days){ const d=new Date(base); d.setDate(d.getDate()+days)
 /* ============================================================= *
  *  DIAGRAMA DE GANTT  (colapsable + arrastrar para crear dependencia)
  * ============================================================= */
-let ganttOpen=false, ganttDayW=20;
+let ganttOpen=true, ganttDayW=20;   // el Gantt es ahora el panel principal (siempre visible)
 const ganttEl=document.getElementById('gantt');
 const DAYMS=86400000;
 
-function toggleGantt(){
-  ganttOpen=!ganttOpen;
-  ganttEl.classList.toggle('collapsed',!ganttOpen);
-  document.getElementById('ganttToggle').textContent = (ganttOpen?'▾':'▸')+' Diagrama de Gantt';
-  if(ganttOpen) renderGantt();
-  onResize();
-}
-document.getElementById('ganttToggle').onclick=toggleGantt;
 document.getElementById('ganttZoom').addEventListener('input',e=>{ ganttDayW=Number(e.target.value); renderGantt(); });
-function openGantt(){ if(!ganttOpen) toggleGantt(); else renderGantt(); }
+function openGantt(){ renderGantt(); }
 
 function ganttRange(){
   let min=null,max=null;
@@ -1571,6 +1616,13 @@ dragbar.addEventListener('mousedown',()=>{resizing=true;document.body.style.curs
 window.addEventListener('mousemove',e=>{ if(!resizing)return; const w=Math.max(360,Math.min(900,e.clientX)); left.style.width=w+'px'; onResize(); });
 window.addEventListener('mouseup',()=>{resizing=false;document.body.style.cursor='';});
 
+// redimensionar verticalmente el visor 3D (abajo)
+const vdragbar=document.getElementById('vdragbar'); const rightPanel=document.getElementById('right');
+let vresizing=false;
+vdragbar.addEventListener('mousedown',e=>{e.preventDefault();vresizing=true;document.body.style.cursor='row-resize';});
+window.addEventListener('mousemove',e=>{ if(!vresizing)return; const h=Math.max(110,Math.min(window.innerHeight-200, window.innerHeight-e.clientY)); rightPanel.style.height=h+'px'; onResize(); });
+window.addEventListener('mouseup',()=>{ if(vresizing){vresizing=false;document.body.style.cursor='';onResize();} });
+
 /* ============================================================= *
  *  ATAJOS
  * ============================================================= */
@@ -1580,9 +1632,109 @@ window.addEventListener('keydown',e=>{
   if(e.key==='a'&&(e.ctrlKey)){}
 });
 
+/* ============================================================= *
+ *  DASHBOARD DE PROYECTOS + PERSISTENCIA (localStorage)
+ * ============================================================= */
+const LS_KEY='lc4d_projects_v1';
+let currentProjectId=null, saveTimer=null;
+function lsGet(){ try{ return JSON.parse(localStorage.getItem(LS_KEY)||'{}'); }catch(_){ return {}; } }
+function lsSet(o){ try{ localStorage.setItem(LS_KEY, JSON.stringify(o)); }catch(e){ console.warn('No se pudo guardar en el navegador:', e); } }
+function newProjectId(){ return 'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+
+function snapshot(){
+  return { projStart:document.getElementById('projStart').value, colW:State.colW,
+    fromVisor:!!window.__fromVisor, payload:window.__incomingPayload||null,
+    tasks:State.tasks, seq:State.seq };
+}
+function leafCount(){ return State.tasks.filter((t,i)=>!isSummary(i)).reduce((s,t)=>s+(t.count!=null?t.count:(t.elements?t.elements.length:0)),0); }
+function saveCurrent(){
+  if(!currentProjectId) return;
+  const all=lsGet(); const p=all[currentProjectId]||{id:currentProjectId};
+  p.updatedAt=Date.now(); p.nodes=State.tasks.length; p.els=leafCount(); p.data=snapshot();
+  all[currentProjectId]=p; lsSet(all); updateProjName();
+}
+function scheduleSave(){ if(!currentProjectId)return; clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrent,500); }
+function flushSave(){ if(saveTimer){ clearTimeout(saveTimer); saveTimer=null; } if(currentProjectId) saveCurrent(); }
+function createProject(name, source){
+  flushSave();                         // persistir el proyecto anterior antes de cambiar
+  currentProjectId=newProjectId();
+  const all=lsGet();
+  all[currentProjectId]={id:currentProjectId, name:name||'Proyecto', source:source||'ifc', createdAt:Date.now(), updatedAt:Date.now(), data:null};
+  lsSet(all); updateProjName(); return currentProjectId;
+}
+function updateProjName(){
+  const all=lsGet(); const p=currentProjectId&&all[currentProjectId];
+  document.getElementById('projName').textContent = p? ('— '+p.name) : '';
+}
+function loadProject(id){
+  const all=lsGet(); const p=all[id]; if(!p) return;
+  flushSave();
+  currentProjectId=id;
+  const d=p.data||{};
+  clearModel();                       // la geometría no se persiste
+  State.tasks=(d.tasks||[]); State.seq=d.seq||(State.tasks.length+2);
+  State.colW=d.colW||null;
+  window.__fromVisor=!!d.fromVisor; window.__incomingPayload=d.payload||null;
+  document.getElementById('projStart').value=d.projStart||new Date().toISOString().slice(0,10);
+  State.selectedTaskId=State.tasks[0]?State.tasks[0].id:null;
+  setDataOnly(window.__fromVisor && Elements.size===0);
+  document.getElementById('hEls').textContent=leafCount().toLocaleString('es');
+  document.getElementById('hHint').textContent='Proyecto cargado. El 3D no se guarda: vuelve a importar el IFC si quieres ver/simular el modelo.';
+  renderTable(); openGantt(); applyElementColors(); updateVisorBtn(); updateProjName();
+  closeDashboard();
+}
+function deleteProject(id){
+  const all=lsGet(); const nm=all[id]?all[id].name:'';
+  if(!confirm('¿Eliminar el proyecto "'+nm+'"? No se puede deshacer.')) return;
+  delete all[id]; lsSet(all);
+  if(currentProjectId===id){ currentProjectId=null; updateProjName(); }
+  renderDashboard();
+}
+function renameProject(id){
+  const all=lsGet(); if(!all[id]) return;
+  const nm=prompt('Nuevo nombre del proyecto:', all[id].name); if(nm==null) return;
+  all[id].name=nm.trim()||all[id].name; lsSet(all); renderDashboard(); updateProjName();
+}
+function fdate(ts){ try{ return new Date(ts).toLocaleString('es',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(_){ return ''; } }
+function renderDashboard(){
+  const all=lsGet();
+  const list=Object.values(all).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+  const grid=document.getElementById('dbGrid');
+  const cards=list.map(p=>{
+    const src=p.source==='visor'?'<span class="badge visor">Del visor</span>':p.source==='ifc'?'<span class="badge ifc">IFC</span>':'<span class="badge">Local</span>';
+    return `<div class="dbcard" data-open="${p.id}">
+      <div class="nm" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+      <div class="meta">${src}<br>${(p.nodes||0)} nodos · ${(p.els||0).toLocaleString('es')} elem.<br>Actualizado: ${fdate(p.updatedAt)}</div>
+      <div class="acts"><button data-rename="${p.id}">✎ Renombrar</button><button data-del="${p.id}">🗑</button></div>
+    </div>`;
+  }).join('');
+  grid.innerHTML = `<div class="dbcard new" data-new="1"><div class="plus">＋</div><div>Nuevo proyecto<br><small>(vacío o importar IFC)</small></div></div>` + cards +
+    (list.length?'':'<div class="meta" style="grid-column:1/-1;color:var(--muted)">Aún no hay proyectos guardados. Crea uno o trae modelos desde el visor BIM.</div>');
+  grid.querySelectorAll('[data-open]').forEach(c=>c.addEventListener('click',e=>{ if(e.target.closest('[data-rename],[data-del]'))return; loadProject(c.dataset.open); }));
+  grid.querySelectorAll('[data-rename]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();renameProject(b.dataset.rename);}));
+  grid.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();deleteProject(b.dataset.del);}));
+  grid.querySelector('[data-new]').addEventListener('click',()=>{ newBlankProject(); });
+}
+function newBlankProject(){
+  flushSave();
+  currentProjectId=null; window.__fromVisor=false; window.__incomingPayload=null; setDataOnly(false);
+  State.tasks=[]; State.seq=1; State.selectedTaskId=null; clearModel();
+  document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
+  document.getElementById('hHint').textContent='Proyecto nuevo. Importa un IFC o trae modelos desde el visor.';
+  renderTable(); updateProjName(); closeDashboard();
+}
+function openDashboard(){ renderDashboard(); document.getElementById('dashboard').classList.add('show'); }
+function closeDashboard(){ document.getElementById('dashboard').classList.remove('show'); }
+document.getElementById('btnProjects').onclick=openDashboard;
+document.getElementById('dbClose').onclick=closeDashboard;
+document.getElementById('dashboard').addEventListener('click',e=>{ if(e.target.id==='dashboard') closeDashboard(); });
+
 /* init */
+State.colW=null;
 renderTable();
 document.getElementById('projStart').value = new Date().toISOString().slice(0,10);
+// abrir el dashboard al inicio si hay proyectos guardados
+if(Object.keys(lsGet()).length) openDashboard();
 </script>
 </body>
 </html>
