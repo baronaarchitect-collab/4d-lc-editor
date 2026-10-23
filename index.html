@@ -157,6 +157,7 @@
   <div class="sep"></div>
   <button id="btnCPM" title="Calcular ruta crítica (CPM)">⚡ Calcular CPM</button>
   <label class="hint">Inicio proyecto <input type="date" id="projStart"></label>
+  <button id="btnVisor" title="Al seleccionar una actividad, resaltar sus elementos en el visor BIM" style="display:none">🔗 Ver en visor: ON</button>
   <div class="spacer"></div>
   <button id="btn4D" title="Simulación 4D">▶ Simulación 4D</button>
   <button id="btnRotX" title="Girar el modelo 90° en X (corrige el modelo volteado)">⟲ X</button>
@@ -654,10 +655,14 @@ window.addEventListener('message', (ev)=>{
     // confianza: proviene de la ventana que nos abrió
     if(window.opener && ev.source && ev.source!==window.opener) return;
     INCOMING = d;
+    window.__visorOrigin = ev.origin || '*';   // para devolver selección al visor
     openPreview(d);
     try{ ev.source && ev.source.postMessage({type:'LC4D_ACK'}, '*'); }catch(_){}
   }
 });
+// clave estable de un grupo (debe coincidir con el4DKey del visor)
+function groupKey(g){ return (g.lvl||'Sin nivel')+'\u0001'+(g.cat||'Otros')+'\u0001'+(g.typ||'(sin tipo)'); }
+function visorConnected(){ return !!window.opener && !!window.__fromVisor; }
 
 // claves de agrupación operando sobre grupos {lvl,cat,typ,count,q}
 function groupKeys(mode){
@@ -694,8 +699,9 @@ function planFromGroups(groups, mode){
       const arr=buckets.get(k);
       const count=arr.reduce((s,g)=>s+(g.count||0),0);
       const q={}; arr.forEach(g=>addQ(q,g.q));
-      if(ki===keys.length-1) rows.push({label:k, level, leaf:true, count, q});
-      else { rows.push({label:k, level, leaf:false, count, q}); rec(arr, ki+1, level+1); }
+      const gkeys=[...new Set(arr.map(groupKey))];   // claves originales (para seleccionar en el visor)
+      if(ki===keys.length-1) rows.push({label:k, level, leaf:true, count, q, keys:gkeys});
+      else { rows.push({label:k, level, leaf:false, count, q, keys:gkeys}); rec(arr, ki+1, level+1); }
     }
   })(groups, 0, 1);
   return rows;
@@ -740,10 +746,12 @@ function buildFromPlan(rows, payload){
   const root=mk('📦 '+(payload.project||'Proyecto 4D'),0); tasks.push(root);
   for(const r of rows){
     const t=mk(r.label, r.level);
-    t.count=r.count; t.q=r.q; t.units=payload.units||{};
+    t.count=r.count; t.q=r.q; t.units=payload.units||{}; t.srcKeys=r.keys||[];
     if(r.leaf){ t.duration=Math.max(1,Math.ceil(r.count/5)); }
     tasks.push(t);
   }
+  // raíz: todas las claves (seleccionar todo el proyecto en el visor)
+  tasks[0].srcKeys=[...new Set(rows.flatMap(r=>r.keys||[]))];
   State.tasks=tasks;
   State.seq=Math.max(State.seq, tasks.length+2);
   State.selectedTaskId=tasks[0].id;
@@ -751,9 +759,31 @@ function buildFromPlan(rows, payload){
   setDataOnly(true);   // el 3D vive en el visor; aquí solo data (3D en pausa)
   if(!document.getElementById('projStart').value) document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
   document.getElementById('hEls').textContent=(payload.groups||[]).reduce((s,g)=>s+(g.count||0),0).toLocaleString('es');
+  updateVisorBtn();
   document.getElementById('hHint').textContent=`EDT creada desde el visor: ${payload.models?.length||0} modelo(s), ${tasks.length-1} nodos. El 3D permanece en el visor.`;
   renderTable(); calcCPM(); openGantt();
 }
+
+/* ---------- Sincronizar selección 4D → visor ---------- */
+let visorSync = true;
+function updateVisorBtn(){
+  const b=document.getElementById('btnVisor'); if(!b) return;
+  const conn=visorConnected();
+  b.style.display = conn ? 'inline-flex' : 'none';
+  b.classList.toggle('active', conn && visorSync);
+  b.textContent = (conn && visorSync) ? '🔗 Ver en visor: ON' : '🔗 Ver en visor: OFF';
+}
+function pushSelectionToVisor(){
+  if(!visorSync || !visorConnected()) return;
+  const t=getTask(State.selectedTaskId);
+  const keys=(t && t.srcKeys) || [];
+  try{ window.opener.postMessage({type: keys.length?'LC4D_SELECT':'LC4D_CLEAR', keys}, window.__visorOrigin||'*'); }catch(_){}
+}
+document.getElementById('btnVisor').onclick=()=>{
+  visorSync=!visorSync; updateVisorBtn();
+  if(visorSync) pushSelectionToVisor();
+  else { try{ window.opener && window.opener.postMessage({type:'LC4D_CLEAR',keys:[]}, window.__visorOrigin||'*'); }catch(_){} }
+};
 
 function ifcBufferGeometry(vertexData, indexData){
   const g = new THREE.BufferGeometry();
@@ -1234,6 +1264,7 @@ function selectTask(id){
   document.querySelectorAll('#ganttBody .grow').forEach(r=>r.classList.toggle('selg', Number(r.dataset.grow)===id));
   updateSelUI();
   highlightTaskElements();
+  pushSelectionToVisor();   // resaltar los elementos de esta actividad en el visor BIM
 }
 
 /* ============================================================= *
