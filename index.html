@@ -120,6 +120,21 @@
   #modal .el{padding:6px 16px;display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #1a212c;}
   #modal .el:hover{background:var(--panel2);}
   #modal .el small{color:var(--muted);}
+
+  /* preview de importación desde el visor */
+  #previewModal{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:60;}
+  #previewModal .pvbox{background:var(--panel);border:1px solid var(--accent);border-radius:12px;width:680px;max-width:92vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.6);}
+  #previewModal .hd{padding:12px 16px;border-bottom:1px solid var(--line);font-weight:700;color:var(--accent);}
+  .pvmeta{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:12px;}
+  .pvmeta b{color:var(--txt);}
+  #pvBody{overflow:auto;padding:6px 0;flex:1;}
+  .pvrow{display:flex;justify-content:space-between;gap:12px;padding:3px 16px;border-bottom:1px solid #141a24;font-size:12px;}
+  .pvrow:hover{background:var(--panel2);}
+  .pvname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .pvqty{color:var(--accent2);white-space:nowrap;flex-shrink:0;}
+  .pvfoot{padding:10px 16px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;}
+  #previewModal button.primary{background:var(--accent2);border-color:var(--accent2);color:#06231a;font-weight:700;}
+  table.sched .qchip{font-size:10px;color:var(--accent2);background:#0c1017;border:1px solid var(--line);border-radius:8px;padding:0 5px;white-space:nowrap;}
 </style>
 </head>
 <body>
@@ -205,6 +220,29 @@
 <div id="modal"><div class="box">
   <div class="hd"><span id="mTitle">Elementos</span><button id="mClose">Cerrar</button></div>
   <div class="bd" id="mBody"></div>
+</div></div>
+
+<div id="previewModal"><div class="box pvbox">
+  <div class="hd"><span id="pvTitle">Datos recibidos del visor</span></div>
+  <div class="pvmeta">
+    <div>Modelos: <b id="pvModels">—</b></div>
+    <div>Total de elementos: <b id="pvTotal">0</b> · <span id="pvCounts"></span></div>
+    <label>Agrupar por&nbsp;
+      <select id="pvMode">
+        <option value="level-cat" selected>Nivel › Capítulo › Tipo</option>
+        <option value="level-type">Nivel › Tipo</option>
+        <option value="type">Capítulo › Tipo</option>
+        <option value="level">Nivel › Capítulo</option>
+      </select>
+    </label>
+  </div>
+  <div class="bd" id="pvBody"></div>
+  <div class="pvfoot">
+    <span class="hint">Revisa la lista de capítulos y actividades con sus cantidades. Al confirmar se crea la EDT y el Gantt inicial (editable y arrastrable).</span>
+    <div class="spacer"></div>
+    <button id="pvCancel">Cancelar</button>
+    <button id="pvConfirm" class="primary">✓ Confirmar y crear EDT</button>
+  </div>
 </div></div>
 
 <script type="importmap">
@@ -458,10 +496,30 @@ const CONSTRUCTION_SEQUENCE = [
   'IFCSPACE'
 ];
 function normCat(s){ return (s||'').replace(/[^a-z0-9]/gi,'').toUpperCase(); }
+// Palabras clave (ES/EN, categorías Revit) -> rango constructivo aproximado.
+const REVIT_SEQ = [
+  [['cimen','zapat','pilote','footing','foundation','losadecimen'], 3],
+  [['pilar','columna','column'], 6],
+  [['viga','beam','armadura','cercha','estructuradecub'], 7],
+  [['suelo','piso','losa','forjado','floor','slab','placa'], 8],
+  [['cubierta','techo','roof','tejado'], 10],
+  [['escalera','rampa','stair','ramp'], 12],
+  [['murocortina','fachada','curtain'], 17],
+  [['muro','pared','wall','tabiqu','mamposteria','panel'], 16],
+  [['puerta','door'], 19],
+  [['ventana','window','vidrio','acristal'], 20],
+  [['barand','pasaman','railing'], 21],
+  [['tuberia','tuberias','pipe','conducto','duct','bandeja','cabletray','rociador','sprinkler','sanitar','fontaner','hidrosan','climatiz','hvac','mecanic','electric','instalac','accesoriodetub'], 26],
+  [['lumin','light','aparato','terminaldeaire','terminal','equipo','artefacto'], 30],
+  [['acabado','revestim','cielo','falsotecho','pintura','enchap','cover','recubr','zocalo','cenefa'], 44],
+  [['mobil','mueble','furniture','furnishing','equipamiento','mobiliario'], 46],
+  [['generic','proxy','modelogeneric','especialid','masa'], 49],
+];
 function constructionRank(catKey){
   const up=normCat(catKey);
   for(let i=0;i<CONSTRUCTION_SEQUENCE.length;i++){ if(up.startsWith(CONSTRUCTION_SEQUENCE[i])) return i; }
   for(let i=0;i<CONSTRUCTION_SEQUENCE.length;i++){ if(up.includes(CONSTRUCTION_SEQUENCE[i])) return i+0.4; }
+  for(const [kws,r] of REVIT_SEQ){ for(const kw of kws){ if(up.includes(kw.toUpperCase())) return r+0.2; } }
   return CONSTRUCTION_SEQUENCE.length + 10;   // desconocido -> al final
 }
 function natNum(s){ const m=String(s).match(/-?\d+(?:[.,]\d+)?/); return m? parseFloat(m[0].replace(',','.')) : NaN; }
@@ -546,6 +604,121 @@ document.getElementById('tWBS').onclick=()=>{
   if(State.tasks.length>0 && !confirm('¿Regenerar la EDT desde el IFC? Reemplazará el cronograma actual.')) return;
   buildWBSFromIFC('Modelo IFC');
 };
+
+/* ============================================================= *
+ *  IMPORTAR DESDE EL VISOR (LiveCity VisorBeam) vía postMessage
+ *  Payload: { type:'LC4D_IMPORT', project, models[], units{}, groups:[{lvl,cat,typ,count,q}] }
+ * ============================================================= */
+let INCOMING = null;   // payload recibido, pendiente de confirmación
+
+// avisar al visor que el 4D está listo para recibir
+try{ if(window.opener) window.opener.postMessage({type:'LC4D_READY'}, '*'); }catch(_){}
+window.addEventListener('message', (ev)=>{
+  const d = ev.data;
+  if(!d || typeof d!=='object') return;
+  if(d.type==='LC4D_IMPORT' && Array.isArray(d.groups)){
+    // confianza: proviene de la ventana que nos abrió
+    if(window.opener && ev.source && ev.source!==window.opener) return;
+    INCOMING = d;
+    openPreview(d);
+    try{ ev.source && ev.source.postMessage({type:'LC4D_ACK'}, '*'); }catch(_){}
+  }
+});
+
+// claves de agrupación operando sobre grupos {lvl,cat,typ,count,q}
+function groupKeys(mode){
+  const kLevel={fn:g=>g.lvl||'Sin nivel', cmp:(a,b)=>{ const na=natNum(a),nb=natNum(b); if(!isNaN(na)&&!isNaN(nb)&&na!==nb)return na-nb; return String(a).localeCompare(String(b)); }};
+  const kCat  ={fn:g=>g.cat||'Otros', cmp:(a,b)=>(constructionRank(a)-constructionRank(b))||String(a).localeCompare(String(b))};
+  const kTyp  ={fn:g=>g.typ||'(sin tipo)', cmp:(a,b)=>String(a).localeCompare(String(b))};
+  switch(mode){
+    case 'level-type': return [kLevel,kTyp];
+    case 'level':      return [kLevel,kCat];
+    case 'type':       return [kCat,kTyp];
+    default:           return [kLevel,kCat,kTyp];   // Nivel › Capítulo › Tipo
+  }
+}
+function addQ(dst, q){ if(!q) return dst; for(const k in q){ dst[k]=(dst[k]||0)+(Number(q[k])||0); } return dst; }
+function fmtQ(q, units){
+  if(!q) return '';
+  const order=['Área','Area','Volumen','Longitud','Count','Recuento'];
+  const keys=Object.keys(q).sort((a,b)=>{ const ia=order.indexOf(a),ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+  return keys.filter(k=>q[k]>0).slice(0,3).map(k=>{
+    const v=q[k]; const u=(units&&units[k])?(' '+units[k]):'';
+    return `${(+v).toLocaleString('es',{maximumFractionDigits:2})}${u} ${k.toLowerCase()}`;
+  }).join(' · ');
+}
+
+/* convierte groups -> plan jerárquico ordenado [{label,level,leaf,count,q}] */
+function planFromGroups(groups, mode){
+  const keys=groupKeys(mode);
+  const rows=[];
+  (function rec(items, ki, level){
+    const key=keys[ki]; const buckets=new Map();
+    for(const it of items){ const k=key.fn(it)||'(sin dato)'; if(!buckets.has(k))buckets.set(k,[]); buckets.get(k).push(it); }
+    const ordered=[...buckets.keys()].sort(key.cmp);
+    for(const k of ordered){
+      const arr=buckets.get(k);
+      const count=arr.reduce((s,g)=>s+(g.count||0),0);
+      const q={}; arr.forEach(g=>addQ(q,g.q));
+      if(ki===keys.length-1) rows.push({label:k, level, leaf:true, count, q});
+      else { rows.push({label:k, level, leaf:false, count, q}); rec(arr, ki+1, level+1); }
+    }
+  })(groups, 0, 1);
+  return rows;
+}
+
+/* ---------- Previsualización ---------- */
+function openPreview(payload){
+  const m=document.getElementById('previewModal');
+  document.getElementById('pvTitle').textContent = `Datos recibidos del visor — ${payload.project||'Proyecto'}`;
+  document.getElementById('pvModels').textContent = (payload.models||[]).join(' · ') || '—';
+  const total=(payload.groups||[]).reduce((s,g)=>s+(g.count||0),0);
+  document.getElementById('pvTotal').textContent = total.toLocaleString('es');
+  m.style.display='flex';
+  renderPreviewTree();
+}
+function renderPreviewTree(){
+  if(!INCOMING) return;
+  const mode=document.getElementById('pvMode').value;
+  const rows=planFromGroups(INCOMING.groups, mode);
+  const units=INCOMING.units||{};
+  const body=document.getElementById('pvBody');
+  body.innerHTML = rows.map(r=>`<div class="pvrow" style="padding-left:${8+r.level*18}px">
+     <span class="pvname" style="font-weight:${r.leaf?400:700}">${r.leaf?'•':'▸'} ${escapeHtml(r.label)}</span>
+     <span class="pvqty">${r.count.toLocaleString('es')} ud${fmtQ(r.q,units)?' · '+fmtQ(r.q,units):''}</span>
+   </div>`).join('');
+  const leaves=rows.filter(r=>r.leaf).length, chapters=rows.filter(r=>!r.leaf).length;
+  document.getElementById('pvCounts').textContent = `${chapters} capítulos · ${leaves} actividades`;
+}
+document.getElementById('pvMode').addEventListener('change', renderPreviewTree);
+document.getElementById('pvCancel').onclick=()=>{ document.getElementById('previewModal').style.display='none'; };
+document.getElementById('pvConfirm').onclick=()=>{
+  if(!INCOMING) return;
+  buildFromPlan(planFromGroups(INCOMING.groups, document.getElementById('pvMode').value), INCOMING);
+  document.getElementById('previewModal').style.display='none';
+};
+
+/* ---------- Construye la EDT + Gantt desde el plan confirmado ---------- */
+function buildFromPlan(rows, payload){
+  // modelo liviano (sin geometría): limpiamos geometría previa
+  clearModel();
+  const tasks=[]; const mk=(name,level)=>{ const t=newTask(level); t.name=name; return t; };
+  const root=mk('📦 '+(payload.project||'Proyecto 4D'),0); tasks.push(root);
+  for(const r of rows){
+    const t=mk(r.label, r.level);
+    t.count=r.count; t.q=r.q; t.units=payload.units||{};
+    if(r.leaf){ t.duration=Math.max(1,Math.ceil(r.count/5)); }
+    tasks.push(t);
+  }
+  State.tasks=tasks;
+  State.seq=Math.max(State.seq, tasks.length+2);
+  State.selectedTaskId=tasks[0].id;
+  window.__fromVisor=true;
+  if(!document.getElementById('projStart').value) document.getElementById('projStart').value=new Date().toISOString().slice(0,10);
+  document.getElementById('hEls').textContent=(payload.groups||[]).reduce((s,g)=>s+(g.count||0),0).toLocaleString('es');
+  document.getElementById('hHint').textContent=`EDT creada desde el visor: ${payload.models?.length||0} modelo(s), ${tasks.length-1} nodos. El 3D permanece en el visor.`;
+  renderTable(); calcCPM(); openGantt();
+}
 
 function ifcBufferGeometry(vertexData, indexData){
   const g = new THREE.BufferGeometry();
@@ -868,7 +1041,14 @@ function renderTable(){
     const twist = summ ? `<span class="twist" data-tw="${t.id}">${t.collapsed?'▸':'▾'}</span>` : '<span class="twist"></span>';
     const indent = `<span class="indent" style="width:${t.level*18}px"></span>`;
     const swatch = summ?'' : `<span class="swatch" style="background:${t.color}"></span>`;
-    const elc = summ?'' : `<span class="elcount" data-el="${t.id}" title="Ver/gestionar elementos asignados">${t.elements.length}⬚</span>`;
+    let elc;
+    if(t.count!=null || (summ && window.__fromVisor)){               // modo visor: mostrar cantidades
+      const r = summ ? rollupCountQ(i) : {count:t.count||0, q:t.q||{}};
+      const qt = fmtQ(r.q, t.units||{});
+      elc = `<span class="qchip" title="${qt||''}">${(r.count||0).toLocaleString('es')} ud</span>`;
+    } else {
+      elc = summ?'' : `<span class="elcount" data-el="${t.id}" title="Ver/gestionar elementos asignados">${t.elements.length}⬚</span>`;
+    }
     const critBadge = t.critical? '<span class="cbadge">CRÍTICA</span>':'';
     // ocultar si un ancestro está colapsado
     if(isHidden(i)) return '';
@@ -933,6 +1113,15 @@ function rollupDur(i){
     if(!isSummary(j)) sum+=Number(State.tasks[j].duration)||0;
   }
   return sum;
+}
+function rollupCountQ(i){
+  // suma de cantidades (count + q) de las hojas descendientes
+  const t=State.tasks[i]; const q={}; let count=0;
+  for(let j=i+1;j<State.tasks.length && State.tasks[j].level>t.level;j++){
+    const c=State.tasks[j]; if(isSummary(j)) continue;
+    count+=c.count||0; addQ(q, c.q);
+  }
+  return {count, q};
 }
 
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
